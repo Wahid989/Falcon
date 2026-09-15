@@ -1,0 +1,67 @@
+# FALCON local development stack.
+#
+# Skeleton compose file: every service is a placeholder that builds and starts
+# without crashing so a new developer can bring the whole system up with a
+# single `docker compose up`. Real behaviour (agent runtimes, the .NET storage
+# API, framing, logging, etc.) is added by later work; the service names,
+# wiring, and ports defined here are the contract those pieces plug into.
+#
+# Services:
+#   commander    Python  - issues commands to Followers (one instance)
+#   follower     Python  - simulated agent that complies or declines (scaled later)
+#   storage-api  .NET     - ingests JSONL logs and exposes a query API
+#   sql-server   MSSQL    - persistent storage for ingested exchanges
+
+services:
+  commander:
+    build:
+      context: ./src/agents
+    image: falcon-agent
+    environment:
+      FALCON_ROLE: commander
+    networks:
+      - falcon
+    restart: unless-stopped
+
+  follower:
+    build:
+      context: ./src/agents
+    # Reuses the same image as the commander; the two differ only by role.
+    image: falcon-agent
+    environment:
+      FALCON_ROLE: follower
+    networks:
+      - falcon
+    restart: unless-stopped
+    # Followers are scaled to 10+ instances once the transport layer exists:
+    #   docker compose up --scale follower=10
+
+  storage-api:
+    build:
+      context: ./storage/dotnet
+    image: falcon-storage-api
+    depends_on:
+      - sql-server
+    ports:
+      - "8080:8080"
+    networks:
+      - falcon
+    restart: unless-stopped
+
+  sql-server:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      # Local development default. Override in a git-ignored .env file; never
+      # commit real credentials.
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Falcon_local_dev_1}"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    networks:
+      - falcon
+    restart: unless-stopped
+
+networks:
+  falcon:
+    driver: bridge
