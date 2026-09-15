@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# ---------------------------------------------------------------------------
+# .NET
+# ---------------------------------------------------------------------------
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+*.nupkg
+*.snupkg
+msbuild.log
+msbuild.err
+msbuild.wrn
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+# Local compose overrides and env files should not be committed.
+docker-compose.override.yml
+*.env
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Logs and runtime artifacts (FALCON writes JSONL exchange logs at runtime)
+# ---------------------------------------------------------------------------
+*.log
+*.jsonl
+logs/
+
+# ---------------------------------------------------------------------------
+# OS-specific
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Editors / IDEs
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
