@@ -1,0 +1,72 @@
+name: CI
+
+# Runs on every push to any branch and on every pull request, so status is
+# reported on commits and on PRs. To make a failing check block merges into
+# main, enable branch protection on main and mark these jobs as required
+# status checks (see docs/ci.md).
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Python (lint + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Project dependencies are pinned in requirements.txt once they exist
+          # (added in the Python scaffolding ticket). Install them when present.
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          # Ensure the lint/test tooling is always available, even before the
+          # requirements files land.
+          pip install pytest black flake8
+
+      - name: Check formatting (black)
+        run: black --check .
+
+      - name: Lint (flake8)
+        run: flake8 .
+
+      - name: Run tests (pytest)
+        run: pytest tests/ -v
+
+  dotnet:
+    name: .NET (build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Detect .NET project
+        id: detect
+        run: |
+          if find storage/dotnet -name '*.csproj' -o -name '*.sln' 2>/dev/null | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No .NET project found yet; skipping restore/build."
+          fi
+
+      - name: Restore dependencies
+        if: steps.detect.outputs.exists == 'true'
+        run: dotnet restore storage/dotnet
+
+      - name: Build
+        if: steps.detect.outputs.exists == 'true'
+        run: dotnet build storage/dotnet --no-restore --configuration Release
