@@ -1,0 +1,4 @@
+# FALCON runtime dependencies (pinned).
+# Keep this list minimal — only what the agents need at runtime.
+jsonschema==4.23.0
+pyyaml==6.0.2

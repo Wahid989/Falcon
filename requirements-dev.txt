@@ -1,0 +1,6 @@
+# FALCON development dependencies (pinned).
+# Installed on top of requirements.txt for testing and linting.
+-r requirements.txt
+pytest==8.3.3
+black==24.10.0
+flake8==7.1.1
