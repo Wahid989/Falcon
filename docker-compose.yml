@@ -38,12 +38,17 @@ services:
 
   storage-api:
     build:
-      context: ./storage/dotnet
+      # The storage/ context lets the image include the SQL init scripts.
+      context: ./storage
+      dockerfile: dotnet/Dockerfile
     image: falcon-storage-api
     environment:
       # Connection string to SQL Server. Override in a git-ignored .env file
       # (see config/.env.example); never commit real credentials.
       ConnectionStrings__FalconDb: "${ConnectionStrings__FalconDb:-Server=sql-server,1433;Database=Falcon;User Id=sa;Password=Falcon_local_dev_1;TrustServerCertificate=True}"
+    volumes:
+      # JSONL exchange logs written by the agents. The service only reads them.
+      - ./logs:/logs:ro
     depends_on:
       sql-server:
         condition: service_healthy
@@ -63,6 +68,10 @@ services:
       MSSQL_PID: "Developer"
     ports:
       - "1433:1433"
+    volumes:
+      # Init and test scripts, at the same path scripts/init-db.sh resolves to
+      # when it is piped into the container.
+      - ./storage/sql:/storage/sql:ro
     networks:
       - falcon
     restart: unless-stopped
