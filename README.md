@@ -69,8 +69,8 @@ runtimes land (Phase 2).
 ### Full stack (Docker Compose)
 
 Local development of the whole system (agents + .NET storage + SQL Server) runs
-through Docker Compose. See [`docs/docker-setup.md`](docs/docker-setup.md) and
-[`docs/database.md`](docs/database.md).
+through Docker Compose. See [`docs/docker-setup.md`](docs/docker-setup.md),
+[`docs/database.md`](docs/database.md) and [`docs/storage.md`](docs/storage.md).
 
 ```bash
 cp config/.env.example .env     # configure secrets locally (git-ignored)
