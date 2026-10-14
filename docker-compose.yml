@@ -63,6 +63,10 @@ services:
       MSSQL_PID: "Developer"
     ports:
       - "1433:1433"
+    volumes:
+      # Init and test scripts, at the same path scripts/init-db.sh resolves to
+      # when it is piped into the container.
+      - ./storage/sql:/storage/sql:ro
     networks:
       - falcon
     restart: unless-stopped
