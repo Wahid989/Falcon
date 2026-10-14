@@ -77,6 +77,18 @@ cp config/.env.example .env     # configure secrets locally (git-ignored)
 docker compose up --build
 ```
 
+## Protocol & design docs
+
+The v1 protocol is specified in [`src/schema/falcon-v1.json`](src/schema/falcon-v1.json)
+and documented here:
+
+- [`docs/protocol.md`](docs/protocol.md) — message envelope
+- [`docs/vocabulary.md`](docs/vocabulary.md) — commands, responses, decline reasons, role/heartbeat messages
+- [`docs/state.md`](docs/state.md) — simulated follower state
+- [`docs/acceptance-criteria.md`](docs/acceptance-criteria.md) — Given/When/Then per command
+- [`docs/versioning.md`](docs/versioning.md) — schema versioning strategy
+- [`docs/protocol-errors.md`](docs/protocol-errors.md) — protocol error behavior
+
 ## Development workflow
 
 All work happens on feature branches merged into `main` via reviewed pull
@@ -87,7 +99,9 @@ requests; `main` is protected and CI must be green. Full conventions
 
 ## Status
 
-Phase 0 (project & repository foundation, FALCON-001–008) in progress. The
+Phase 0 (foundation, FALCON-001–008) and Phase 1 (protocol definition,
+FALCON-009–018) complete: the v1 schema, vocabulary, state model, acceptance
+criteria, versioning, and error behavior are defined and schema-tested. The
 build follows a layered plan — Foundation → Protocol → single-pair MVP → TCP →
 decision engine → logging/DB → role switching → hierarchy → disconnect
 recovery → test harness → CI/CD → demo. The MVP round trip (FALCON-031) is the
