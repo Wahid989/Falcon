@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falcon.capstone/schema/falcon-v1.json",
+  "title": "FALCON v1 message",
+  "description": "Wire envelope and payloads for the FALCON protocol, schema version 1. hierarchy_level is deliberately NOT part of the envelope — it is a log-only field computed by the logging layer.",
+  "type": "object",
+  "required": [
+    "message_id",
+    "sender_id",
+    "recipient_id",
+    "timestamp",
+    "schema_version",
+    "sender_role",
+    "role_epoch",
+    "type",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "message_id": { "type": "string", "minLength": 1 },
+    "sender_id": { "$ref": "#/$defs/agent_id" },
+    "recipient_id": { "$ref": "#/$defs/agent_id" },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp."
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Protocol schema version. v1 messages MUST be 1."
+    },
+    "sender_role": { "enum": ["commander", "follower"] },
+    "role_epoch": { "type": "integer", "minimum": 0 },
+    "type": {
+      "enum": [
+        "command",
+        "response",
+        "role_request",
+        "role_grant",
+        "role_deny",
+        "heartbeat"
+      ]
+    },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "command" } } },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/command_payload" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "response" } } },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/response_payload" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "role_request" } } },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/role_request_payload" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "role_grant" } } },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/role_grant_payload" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "role_deny" } } },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/role_deny_payload" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "heartbeat" } } },
+      "then": {
+        "properties": { "payload": { "$ref": "#/$defs/heartbeat_payload" } }
+      }
+    }
+  ],
+  "$defs": {
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 1
+    },
+    "command_name": {
+      "enum": ["HOLD", "PROCEED_TO_WAYPOINT", "RETURN", "REPORT_STATUS"]
+    },
+    "response_name": {
+      "enum": ["COMPLY", "DECLINE", "ERROR", "STATUS_RESPONSE"]
+    },
+    "decline_reason": {
+      "enum": [
+        "BATTERY_CRITICAL",
+        "OBSTACLE_DETECTED",
+        "MECHANICAL_FAULT",
+        "BUSY",
+        "INVALID_REQUEST",
+        "STALE_EPOCH",
+        "TERRAIN_UNSUITABLE",
+        "CAPABILITY_UNAVAILABLE"
+      ]
+    },
+    "deny_reason": {
+      "enum": [
+        "busy",
+        "degraded",
+        "terrain_unsuitable",
+        "equipment_missing",
+        "not_authorized"
+      ]
+    },
+    "error_code": {
+      "enum": [
+        "MALFORMED_JSON",
+        "UNKNOWN_TYPE",
+        "UNSUPPORTED_COMMAND",
+        "MISSING_FIELD",
+        "INVALID_SENDER_OR_RECIPIENT",
+        "STALE_EPOCH",
+        "UNAUTHORIZED",
+        "DUPLICATE_MESSAGE"
+      ]
+    },
+    "status_snapshot": {
+      "type": "object",
+      "description": "A follower's self-reported state. Excludes hierarchy_level (log-only, never on the wire).",
+      "required": ["battery_percent"],
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": { "$ref": "#/$defs/agent_id" },
+        "battery_percent": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "obstacle_detected": { "type": "boolean" },
+        "mechanical_fault": { "type": "boolean" },
+        "terrain": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "type": "string" } },
+        "position": { "type": "string" },
+        "movement_flag": { "type": "boolean" },
+        "current_command": { "type": ["string", "null"] },
+        "current_role": { "enum": ["commander", "follower"] },
+        "role_epoch": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "error_detail": {
+      "type": "object",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "$ref": "#/$defs/error_code" },
+        "message": { "type": "string" },
+        "field": { "type": "string" }
+      }
+    },
+    "command_payload": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "$ref": "#/$defs/command_name" },
+        "waypoint": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "command": { "const": "PROCEED_TO_WAYPOINT" } },
+            "required": ["command"]
+          },
+          "then": { "required": ["waypoint"] },
+          "else": { "properties": { "waypoint": false } }
+        }
+      ]
+    },
+    "response_payload": {
+      "type": "object",
+      "required": ["response", "in_reply_to"],
+      "additionalProperties": false,
+      "properties": {
+        "response": { "$ref": "#/$defs/response_name" },
+        "in_reply_to": { "type": "string", "minLength": 1 },
+        "reason": { "$ref": "#/$defs/decline_reason" },
+        "state": { "$ref": "#/$defs/status_snapshot" },
+        "error": { "$ref": "#/$defs/error_detail" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "response": { "const": "DECLINE" } },
+            "required": ["response"]
+          },
+          "then": { "required": ["reason"] }
+        },
+        {
+          "if": {
+            "properties": { "response": { "const": "STATUS_RESPONSE" } },
+            "required": ["response"]
+          },
+          "then": { "required": ["state"] }
+        },
+        {
+          "if": {
+            "properties": { "response": { "const": "ERROR" } },
+            "required": ["response"]
+          },
+          "then": { "required": ["error"] }
+        }
+      ]
+    },
+    "role_request_payload": {
+      "type": "object",
+      "required": ["target_id"],
+      "additionalProperties": false,
+      "properties": {
+        "target_id": { "$ref": "#/$defs/agent_id" },
+        "requested_role": { "const": "commander" }
+      }
+    },
+    "role_grant_payload": {
+      "type": "object",
+      "required": ["in_reply_to", "granted", "new_epoch"],
+      "additionalProperties": false,
+      "properties": {
+        "in_reply_to": { "type": "string", "minLength": 1 },
+        "granted": { "const": true },
+        "new_epoch": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "role_deny_payload": {
+      "type": "object",
+      "required": ["in_reply_to", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "in_reply_to": { "type": "string", "minLength": 1 },
+        "reason": { "$ref": "#/$defs/deny_reason" }
+      }
+    },
+    "heartbeat_payload": {
+      "type": "object",
+      "description": "The heartbeat is the positive 'I am alive' signal. Downward (commander to followers) carries all followers' statuses; upward (follower to commander) carries the sender's own status.",
+      "oneOf": [
+        {
+          "required": ["status_summary"],
+          "additionalProperties": false,
+          "properties": {
+            "status_summary": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/status_snapshot" }
+            }
+          }
+        },
+        {
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": { "$ref": "#/$defs/status_snapshot" }
+          }
+        }
+      ]
+    }
+  }
+}
