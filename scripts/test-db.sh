@@ -18,10 +18,11 @@ export MSYS_NO_PATHCONV=1
 
 # Default must match docker-compose.yml.
 PASSWORD="${MSSQL_SA_PASSWORD:-Falcon_local_dev_1}"
+DATABASE="${FALCON_DB:-Falcon}"
 
 run_sql() {
     docker compose exec -T sql-server /opt/mssql-tools18/bin/sqlcmd \
-        -S localhost -U sa -P "$PASSWORD" -No -b "$@"
+        -S localhost -U sa -P "$PASSWORD" -No -b -v FalconDb="$DATABASE" "$@"
 }
 
 echo "Waiting for SQL Server..."

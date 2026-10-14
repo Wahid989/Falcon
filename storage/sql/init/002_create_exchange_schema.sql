@@ -9,13 +9,16 @@
 -- It is nullable: a received message from a sender the agent cannot place in
 -- the hierarchy is logged with a null level.
 --
--- SourceHash is the SHA-256 of the originating log line. Its unique index is
--- what makes ingestion idempotent: re-reading a file, or a rotated copy of it,
--- can never create a second row for the same line.
+-- SourceHash identifies the originating log line: a SHA-256 over the line's
+-- file, its position in that file and its content. Its unique index is what
+-- makes ingestion idempotent: re-reading a file, or a rotated copy of it, can
+-- never create a second row for the same line, while two identical lines at
+-- different positions (a genuinely repeated event) stay two rows.
 --
--- Idempotent: safe to run repeatedly.
+-- Idempotent: safe to run repeatedly. $(FalconDb) is the database name (see
+-- 001_create_database.sql).
 
-USE Falcon;
+USE [$(FalconDb)];
 GO
 
 IF OBJECT_ID(N'dbo.Sessions', N'U') IS NULL

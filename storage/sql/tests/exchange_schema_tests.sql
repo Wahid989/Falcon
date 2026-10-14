@@ -4,7 +4,7 @@
 -- behind. Any failed check raises an error; with sqlcmd -b that becomes a
 -- non-zero exit code. Run with scripts/test-db.sh.
 
-USE Falcon;
+USE [$(FalconDb)];
 GO
 
 SET NOCOUNT ON;

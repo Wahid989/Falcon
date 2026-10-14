@@ -7,7 +7,8 @@
 # Usage (from the repository root, with the stack up):
 #   MSSQL_SA_PASSWORD=... ./scripts/init-db.sh [host] [port]
 #
-# Defaults: host=localhost port=1433. Requires sqlcmd on PATH, or run it inside
+# Defaults: host=localhost port=1433, database name from FALCON_DB (default
+# Falcon). Requires sqlcmd on PATH, or run it inside
 # the sql-server container:
 #   docker compose exec -T sql-server /bin/bash < scripts/init-db.sh
 
@@ -16,6 +17,7 @@ set -euo pipefail
 HOST="${1:-localhost}"
 PORT="${2:-1433}"
 PASSWORD="${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD}"
+DATABASE="${FALCON_DB:-Falcon}"
 INIT_DIR="$(cd "$(dirname "$0")/.." && pwd)/storage/sql/init"
 
 # Locate sqlcmd (path differs across image versions).
@@ -37,7 +39,7 @@ done
 
 for script in "$INIT_DIR"/*.sql; do
     echo "Applying $(basename "$script")..."
-    "$SQLCMD" -S "${HOST},${PORT}" -U sa -P "$PASSWORD" -No -b -i "$script"
+    "$SQLCMD" -S "${HOST},${PORT}" -U sa -P "$PASSWORD" -No -b -v FalconDb="$DATABASE" -i "$script"
 done
 
 echo "Database initialization complete."
