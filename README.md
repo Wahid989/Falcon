@@ -82,6 +82,7 @@ docker compose up --build
 The v1 protocol is specified in [`src/schema/falcon-v1.json`](src/schema/falcon-v1.json)
 and documented here:
 
+- [`docs/transport.md`](docs/transport.md) — synchronous interface, in-memory pairs, and agent handoff
 - [`docs/protocol.md`](docs/protocol.md) — message envelope
 - [`docs/vocabulary.md`](docs/vocabulary.md) — commands, responses, decline reasons, role/heartbeat messages
 - [`docs/state.md`](docs/state.md) — simulated follower state
