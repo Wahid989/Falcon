@@ -18,7 +18,7 @@ Status (pass/fail) is reported on the commit and on the PR.
   installs `pytest`, `black`, and `flake8`.
 - `black --check .` — fails if any file is not formatted.
 - `flake8 .` — lints (config in [`.flake8`](../.flake8), aligned with black).
-- `pytest tests/ -v` — runs the test suite.
+- `python -m pytest tests/ -v` — runs the test suite.
 
 **.NET job (`dotnet`)**
 - Sets up .NET 8.
@@ -44,5 +44,9 @@ Once set, a red check on a PR prevents merging into `main`.
 pip install pytest black flake8
 black --check .
 flake8 .
-pytest tests/ -v
+python -m pytest tests/ -v
 ```
+
+Run from the repository root with the project virtual environment active.
+Using `python -m pytest` includes the repository root on Python's import path,
+so tests can import `src.<package>`. This matches the `make test` command.

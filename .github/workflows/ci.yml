@@ -39,7 +39,7 @@ jobs:
         run: flake8 .
 
       - name: Run tests (pytest)
-        run: pytest tests/ -v
+        run: python -m pytest tests/ -v
 
   dotnet:
     name: .NET (build)
