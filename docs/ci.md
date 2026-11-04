@@ -18,7 +18,8 @@ Status (pass/fail) is reported on the commit and on the PR.
   installs `pytest`, `black`, and `flake8`.
 - `black --check .` — fails if any file is not formatted.
 - `flake8 .` — lints (config in [`.flake8`](../.flake8), aligned with black).
-- `python -m pytest tests/ -v` — runs the test suite.
+- `timeout 30s python -m pytest tests/ -v` — runs the test suite, including
+  real loopback TCP/process tests, with a 30-second budget (GNU timeout on Ubuntu).
 
 **.NET job (`dotnet`)**
 - Sets up .NET 8.
