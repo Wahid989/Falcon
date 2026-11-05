@@ -369,3 +369,11 @@ class Commander:
         return CommandResult(
             command, RESPONSE_OUTCOMES[response["payload"]["response"]], response
         )
+
+
+if __name__ == "__main__":
+    import sys
+
+    from src.agents.commander_runner import main
+
+    sys.exit(main())
