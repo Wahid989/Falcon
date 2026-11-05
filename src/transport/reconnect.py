@@ -93,13 +93,12 @@ class ReconnectingTransport(Transport):
         last_error = None
         for attempt in range(self._max_retries + 1):
             self._check_closed()
-            link = self._factory()
-            with self._lock:
-                if self._closed.is_set():
-                    link.close()
-                    raise TransportClosedError("Endpoint is closed")
-                self._link = link
+            link = None
             try:
+                link = self._factory()
+                with self._lock:
+                    self._check_closed()
+                    self._link = link
                 link.connect()
                 if self._on_connect is not None:
                     self._on_connect(link)
@@ -114,11 +113,13 @@ class ReconnectingTransport(Transport):
                 TransportTimeoutError,
                 TransportClosedError,
             ) as exc:
-                link.close()
+                if link is not None:
+                    link.close()
                 self._check_closed()
                 last_error = exc
             except BaseException:
-                link.close()
+                if link is not None:
+                    link.close()
                 raise
             if attempt < self._max_retries:
                 _LOGGER.warning(

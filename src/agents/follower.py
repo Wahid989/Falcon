@@ -77,6 +77,7 @@ class Follower:
         decision_engine: DecisionEngine | None = None,
         state: FollowerState | None = None,
         validator: Validator | None = None,
+        exchange_log=None,
     ) -> None:
         if (
             not isinstance(agent_id, str)
@@ -88,6 +89,7 @@ class Follower:
         if decision_engine is not None and not callable(decision_engine):
             raise TypeError("decision_engine must be callable")
 
+        self._exchange_log = exchange_log
         self.agent_id = agent_id
         self.transport = transport
         self.state = state if state is not None else FollowerState()
@@ -101,6 +103,8 @@ class Follower:
     def handle_once(self, timeout: float) -> FollowerResult | None:
         """Receive and process one command; ignore non-command messages."""
         message = self.transport.receive(timeout)
+        if self._exchange_log is not None:
+            self._exchange_log.record("received", message)
         valid, problems = self._validate(message)
         if not valid:
             return self._send_error_for_invalid_message(message, problems)
@@ -318,6 +322,8 @@ class Follower:
                 "constructed response failed validation: " + "; ".join(errors)
             )
         self.transport.send(message)
+        if self._exchange_log is not None:
+            self._exchange_log.record("sent", message)
 
     def status_snapshot(self) -> dict[str, JSONValue]:
         """Return wire-safe state without the log-only hierarchy level."""

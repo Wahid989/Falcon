@@ -1,0 +1,3 @@
+position: north-fence
+movement_flag: true
+current_command: RETURN

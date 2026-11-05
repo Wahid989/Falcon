@@ -26,6 +26,14 @@ Status (pass/fail) is reported on the commit and on the PR.
 - Restores and builds `storage/dotnet` **only if** a `.csproj`/`.sln` exists.
   Until the .NET service is scaffolded, this job passes without building.
 
+**Docker MVP job (`mvp`)**
+- Builds and runs `python -m scripts.run_mvp` using Docker Compose.
+- Requires single HOLD/COMPLY, broadcast to three, battery exactly 5% decline,
+  state preservation, schema/correlation, and both-side JSONL evidence.
+- Uploads `logs/mvp/` as the `mvp-evidence` artifact, including on failures.
+- Uses a 10-minute job budget including builds; per-command timeout is 5 seconds.
+- See [mvp-running.md](mvp-running.md) for reproduction and report interpretation.
+
 ## Making a failing check block merges
 
 The workflow reports status, but GitHub only *blocks* a merge when branch
@@ -37,7 +45,8 @@ protection requires the check. To enable it (repo admin):
    to pass before merging**.
 3. Add `Python (lint + tests)` and `.NET (build)` as required checks.
 
-Once set, a red check on a PR prevents merging into `main`.
+Also require `Docker MVP checkpoint` to block merges on failed milestone checks.
+Once set, a red required check on a PR prevents merging into `main`.
 
 ## Running the checks locally
 
