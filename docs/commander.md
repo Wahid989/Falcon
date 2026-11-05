@@ -174,6 +174,23 @@ real TCP against the Follower module:
 - bad arguments;
 - a run as a separate process.
 
+`tests/integration/test_decline_round_trip.py` (38 tests) runs the Commander
+and the Follower together, with the project validator on both sides:
+- every decline reason against every command (8 × 4), checking:
+  - the Commander gets `DECLINE` with exactly that reason;
+  - the reply is valid and correlated;
+  - the follower's state is unchanged;
+- a check that the decline reasons in the code and in the schema match;
+- broadcasts where each follower declines with its own reason, and a mixed
+  comply/decline broadcast;
+- a follower that complies normally after declining;
+- protocol errors that are not declines: a stale epoch, or a command from a
+  commander that isn't the follower's parent. Each returns `ERROR` without
+  reaching the decision step.
+
+The decisions in these tests are fixed stand-ins. They test how a decline
+travels between the two agents, not the decision policy.
+
 `tests/unit/test_commander.py` (48 tests) runs the Commander over
 `InMemoryTransport`. It covers:
 - every command;
