@@ -41,6 +41,27 @@ jobs:
       - name: Run tests (pytest)
         run: timeout 30s python -m pytest tests/ -v
 
+  mvp:
+    name: Docker MVP checkpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Compose round trip, broadcast, decline and logs
+        run: python -m scripts.run_mvp
+      - name: Preserve MVP evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvp-evidence
+          path: logs/mvp/
+          retention-days: 7
+
   dotnet:
     name: .NET (build)
     runs-on: ubuntu-latest

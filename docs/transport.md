@@ -130,8 +130,8 @@ decision callable. It uses `FollowerState.parent_id` to authorize its
 commander, passes the current state, command, payload, and message epoch to the
 decision callable, then applies the deterministic transition only to compliant
 commands. The decision contract is defined in `src/decision/base.py`; it does
-not implement command policy. Until FALCON-019 supplies
-`src/schema/validator.py`, callers must inject a validator.
+not implement command policy. The shared validator is now implemented in
+`src/schema/validator.py` and is used by default by both agent modules.
 
 The Commander/Follower round-trip tests use paired in-memory transports and
 inject a test validator backed by `src/schema/falcon-v1.json` with JSON Schema
@@ -152,7 +152,7 @@ faults, or durability. No sockets, serialization/framing, address configuration,
 connection negotiation, or agent runtime wiring are included.
 
 TCP endpoints, framing, recovery support, and network tests are described below.
-Agent-runtime wiring is pending the Commander/Follower modules.
+The actual agent TCP sessions and registration are described below.
 FALCON-031 proves the full single-pair MVP round trip. FALCON-039–041
 implement JSONL exchange/event logging and hierarchy enrichment. Duplicate
 handling, retries, heartbeat recovery, and broader robustness tests remain with
@@ -215,9 +215,9 @@ The follower prints the received HOLD envelope; the commander prints the scripte
 COMPLY response with `in_reply_to`. Both processes close and exit. Start the
 second terminal within 10 seconds, or increase `--timeout`. This is a transport
 smoke test with schema-valid envelopes, not the Commander/Follower runtimes:
-those modules have not landed yet. The demo does not validate, decide, log
-exchanges, or implement authority. Runtime integration remains a handoff to the
-owners of FALCON-022/023 and the FALCON-031 MVP.
+it intentionally bypasses the real agent classes. The demo does not validate,
+decide, log exchanges, or implement authority. For actual agent validation,
+state transitions, and restart recovery, use the persistent agent commands below.
 
 `FrameBuffer` retains partial headers/bodies across calls and extracts one frame
 at a time, leaving combined frames for later receives. Tests split a stream at
@@ -251,7 +251,7 @@ from src.transport import ReconnectingTransport, TCPClientTransport
 link = ReconnectingTransport(
     lambda: TCPClientTransport("127.0.0.1", 5000, connect_timeout=2),
     max_retries=6,
-    on_connect=None,  # supply the runtime's registration handshake here
+    on_connect=None,  # generic transport only; CommanderSession wires registration
 )
 # link.connect(); use send/receive; call link.reconnect() after connection loss.
 # Always link.close() in a finally block.
@@ -259,11 +259,10 @@ link = ReconnectingTransport(
 
 `on_connect(link)` runs on every successful connection, before normal traffic,
 so an application can register/re-register through its own agreed handshake.
-The same wrapper can use a fresh server factory and run follower registration
-after accept. No registration message is invented: v1 has no registration wire
-type, and the agent runtimes are absent. Actual follower registration integration
-remains an agent-runtime handoff. The restart integration test uses a clearly
-transport-only `{"register": true}` object to prove the hook runs again.
+No registration message type is invented. `CommanderSession` now wires a
+validated REPORT_STATUS/STATUS_RESPONSE handshake into this hook, as documented
+below. The older transport-only restart test still uses `{"register": true}`
+to test the callback in isolation; agent tests use the real schema and modules.
 
 Send/receive never reconnect or replay automatically. On connection loss, the
 runtime catches `TransportClosedError`, invokes `reconnect()`, completes its
@@ -317,12 +316,155 @@ EOF, malformed input, or a failed send; use a fresh instance to reconnect.
 
 | Ticket | Verified here | Remaining integration |
 | --- | --- | --- |
-| 026 | Single-client TCP server, framing and intact exchange | Inject into Follower runtime when available. |
-| 027 | TCP client, bounded setup and response exchange | Inject into Commander runtime when available. |
-| 028 | Stream reassembly and two-process transport demo | Real Commander/Follower runtime wiring (022/023 absent). |
-| 029 | Restart recovery, backoff logs, exhaustion and registration hook | Agree and wire the actual follower registration handshake; schema has no registration type. |
+| 026 | Single-client TCP server, framing and intact exchange | Wired into FollowerTCPServer. |
+| 027 | TCP client, bounded setup and response exchange | Wired into CommanderSession. |
+| 028 | Actual Commander/Follower processes exchange all four commands and apply state transitions; stream split tests pass. | Complete locally; Phase-4 policy remains separately injected. |
+| 029 | Actual follower process crash/restart, validated re-registration, subsequent commands, retry exhaustion, and shutdown. | Complete locally; heartbeat/role recovery remain later tickets. |
 | 030 | Local socket/process/error coverage and CI time-budget configuration | Confirm the new run on GitHub after review and push. |
 
-No runtime state, authority, schema behavior, JSONL exchange logging, retry of
-in-flight commands, or Docker agent entry points were invented to fill the
-missing runtime dependencies. The scripted demo is not the FALCON-031 MVP.
+No schema types, role/epoch changes, command replay, JSONL exchange writer, or
+Docker agent entry points are added here. The actual Follower owns state and
+authorization. The Docker/logging MVP is documented in [mvp-running.md](mvp-running.md).
+
+
+## Actual agent sessions (FALCON-028/029)
+
+`src/agents/tcp_runtime.py` wires the real `Commander` and `Follower` classes to
+TCP, using the shared schema validator and the existing state transitions.
+`CommanderSession` owns a `ReconnectingTransport`; `FollowerTCPServer` accepts
+successive connections and keeps its Follower state for the lifetime of that
+process. The existing one-shot/broadcast Commander CLI remains available.
+Persistent registration and recovery are enabled explicitly with `--interactive`.
+
+### Registration without changing the v1 schema
+
+On every new connection, including reconnect, CommanderSession performs:
+
+1. Build and validate a fresh REPORT_STATUS command to the configured follower.
+2. The real Follower checks schema, recipient, configured parent and epoch,
+   invokes the injected policy, and returns its validated STATUS_RESPONSE.
+3. Commander checks schema and correlation through its normal response handler,
+   then requires the expected follower ID, `sender_role=follower`, state
+   `current_role=follower`, and matching envelope/state `role_epoch`.
+4. Only after success does the session report `registered` and allow user commands.
+   Failure participates in the bounded connection retry window. The state probe
+   does not move the follower or change role/epoch. It is a registration exchange
+   for this runtime, not a new wire type or cryptographic identity authentication.
+
+The Follower authorizes the configured parent rather than accepting a new parent
+from the connection. Its first successful REPORT_STATUS on a connection emits a
+registration event. It also remains compatible with legacy one-shot clients
+which do not perform a registration probe. No transport backend interprets these
+messages. Session identity and schema handling belong exclusively to agents.
+
+### Terminal demonstration with actual agents
+
+From the repo root, start terminal 1:
+
+```bash
+.venv/bin/python -m src.agents.follower_runner --agent-id follower-1 --commander-id commander --port 5000 --decision-engine scripts.tcp_agent_policy:decide
+```
+
+Then terminal 2:
+
+```bash
+.venv/bin/python -m src.agents.commander_runner --interactive --follower follower-1=127.0.0.1:5000 --timeout 2 --connect-timeout 1 --connect-retries 6
+```
+
+Both terminals print registration records. In terminal 2 enter one line at a time:
+
+```text
+HOLD
+PROCEED_TO_WAYPOINT north-fence
+REPORT_STATUS
+RETURN
+REPORT_STATUS
+QUIT
+```
+
+The Commander prints correlated results. The Follower prints complete requests,
+responses, and post-command state. HOLD clears movement/current command;
+PROCEED changes position to north-fence; RETURN sets it to base; REPORT_STATUS
+returns the real state without mutation. QUIT closes the Commander; the Follower
+continues listening for another session until Ctrl+C. EOF on Commander stdin
+also closes its session. RECONNECT explicitly opens and registers a new session.
+
+The policy argument is required because the Phase-4 decision engine is not yet
+implemented. `scripts.tcp_agent_policy:decide` is a small demo-only injected
+policy: it declines movement below 20% battery or with a mechanical fault,
+and declines PROCEED when an obstacle is present; otherwise it complies.
+It does not claim terrain/capability/busy/role policy. Swap in the eventual real
+`MODULE:CALLABLE` without editing transport or the Follower. For a low-battery
+demo, add `--state tests/scenarios/follower_low_battery.yml` to terminal 1, then
+try RETURN (DECLINE BATTERY_CRITICAL) and HOLD (COMPLY) from terminal 2.
+
+### Demonstrate restart recovery
+
+Keep the interactive Commander running. Stop the Follower in terminal 1 using
+Ctrl+C. Enter HOLD in terminal 2: it detects link loss and starts retries. Restart
+the identical Follower command in terminal 1 while retries are running.
+
+The Commander re-registers the restarted Follower and reports DELIVERY_UNKNOWN
+for the interrupted command with `recovered=true`. Enter a **new** HOLD or
+REPORT_STATUS to verify communication has resumed. Never interpret successful
+recovery as evidence that the interrupted command was or was not executed.
+It is not replayed. The restarted Follower loads fresh initial/YAML state;
+in-process reconnects preserve live state, but process persistence is not added.
+
+Retries default to 1, 2, 4, 8, 16, 30… seconds, capped at 30, with one initial
+attempt plus `--connect-retries`. The example uses six retries to include the cap.
+INFO/WARNING diagnostics go to stderr; JSON result/event records go to stdout.
+`--initial-backoff` / `--max-backoff` configure interactive mode for demonstrations
+or tests. Exhaustion reports `recovery_failed` with `unreachable=true`; the CLI
+stays available so RECONNECT can start a fresh bounded window later.
+Ordinary response timeouts return TIMEOUT without triggering recovery. Automatic
+loss detection during an otherwise idle connection awaits the heartbeat ticket;
+no new election, role-switching, or failover behavior is added here.
+
+`CommandInterruptedError` from the library carries `message_id` when available,
+`recovered`, and an optional `recovery_error`. If send failed before returning
+its envelope, message_id may be null. A successful reconnect resets old
+Commander correlation state; no old pending command crosses a session boundary.
+`registered_state` is a copy of the registration snapshot, not a continuously
+updated or persistent state cache. Use REPORT_STATUS for current state.
+
+### Verification and file handoff
+
+```bash
+.venv/bin/python -m pytest tests/integration/test_agent_tcp_sessions.py tests/integration/test_agent_tcp_registration.py tests/unit/test_tcp_runtime.py -v
+make test
+make lint
+```
+
+The subprocess tests run both actual entry points, all four commands, state
+transitions, a battery decline, Follower crash/restart and re-registration,
+no command replay, exhaustion followed by explicit recovery, preservation of
+live state across reconnect, and clean idle shutdown. Registration tests reject
+wrong follower/parent/epoch/role metadata. Unit tests confirm that response
+idleness does not reconnect and invalid commands are not sent. Existing frame
+split/hostile byte/backpressure tests continue to exercise the TCP backend.
+
+- `src/agents/tcp_runtime.py`: session registration, agent recovery and serving.
+- `src/agents/follower_runner.py`: persistent Follower CLI, injected policy/YAML,
+  finite polling, and SIGINT/SIGTERM cleanup.
+- `src/agents/commander_runner.py`: optional interactive session; existing one-shot
+  mode stays intact, with its startup backoff aligned to 1 second/cap 30 seconds.
+- `scripts/tcp_agent_policy.py`: explicitly limited demo policy, outside transport.
+- `tests/integration/test_agent_tcp_sessions.py`: actual process-level acceptance.
+- `tests/integration/test_agent_tcp_registration.py`: rejection and cancellation.
+- `tests/unit/test_tcp_runtime.py`: timeout and invalid-command boundaries.
+
+
+## MVP exchange logging and Compose
+
+The actual Commander/Follower modules now accept an optional `exchange_log`.
+The runners enable it with --log-dir/FALCON_LOG_DIR and --session-id/FALCON_SESSION_ID.
+The TCP backend still performs no logging. See [mvp-running.md](mvp-running.md)
+for the record format, heartbeat exclusion, flat log-only hierarchy levels,
+Docker run commands, evidence validation, and limits of this milestone logger.
+
+Interactive Commander sessions resolve Docker service names (for example
+`follower`) at the agent boundary on every connection attempt. DNS failures
+use the same bounded retry count; reconnect resolves again in case the service
+IP changed. The TCP backend remains IPv4-only. DNS uses the system resolver;
+the socket connect timeout starts after name resolution.

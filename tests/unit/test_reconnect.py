@@ -92,3 +92,28 @@ def test_explicit_recovery_clears_unreachable():
     retry.send({})
     good.send.assert_called_once_with({})
     retry.close()
+
+
+def test_retryable_factory_failure_uses_same_retry_budget():
+    good = Mock(spec=Transport)
+    factory = Mock(side_effect=[TransportConnectionError("DNS unavailable"), good])
+    retry = ReconnectingTransport(factory, max_retries=1, initial_backoff=0)
+    try:
+        retry.connect()
+        assert factory.call_count == 2
+        good.connect.assert_called_once()
+        assert not retry.unreachable
+    finally:
+        retry.close()
+
+
+def test_factory_failure_marks_unreachable_without_allocated_link():
+    retry = ReconnectingTransport(
+        Mock(side_effect=TransportConnectionError("DNS unavailable")), max_retries=0
+    )
+    try:
+        with pytest.raises(TransportUnreachableError):
+            retry.connect()
+        assert retry.unreachable
+    finally:
+        retry.close()

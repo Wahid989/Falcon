@@ -66,22 +66,32 @@ make format         # auto-format with black
 The `run-commander` / `run-follower` targets become usable once the agent
 runtimes land (Phase 2).
 
-### Full stack (Docker Compose)
+### MVP and optional storage (Docker Compose)
 
-Local development of the whole system (agents + .NET storage + SQL Server) runs
-through Docker Compose. See [`docs/docker-setup.md`](docs/docker-setup.md),
-[`docs/database.md`](docs/database.md) and [`docs/storage.md`](docs/storage.md).
+Run the full Docker acceptance checkpoint (single HOLD, three-follower
+broadcast, 5% battery decline, state and both-side JSONL evidence):
 
 ```bash
-cp config/.env.example .env     # configure secrets locally (git-ignored)
-docker compose up --build
+.venv/bin/python -m scripts.run_mvp
 ```
+
+Or show just the two-service HOLD/COMPLY exchange:
+
+```bash
+docker compose up --build --abort-on-container-exit --exit-code-from commander
+```
+
+See [the MVP run guide](docs/mvp-running.md) for evidence, cleanup, policy scope,
+and manual commands. SQL/.NET storage is optional under `--profile storage`;
+see [Docker setup](docs/docker-setup.md), [database](docs/database.md), and
+[storage](docs/storage.md).
 
 ## Protocol & design docs
 
 The v1 protocol is specified in [`src/schema/falcon-v1.json`](src/schema/falcon-v1.json)
 and documented here:
 
+- [`docs/mvp-running.md`](docs/mvp-running.md) — Docker milestone, JSONL evidence, CI and go/no-go checks
 - [`docs/transport.md`](docs/transport.md) — transport API, in-memory pairs, TCP demo, recovery, and agent handoff
 - [`docs/commander.md`](docs/commander.md) — Commander module: building, sending and correlating commands
 - [`docs/protocol.md`](docs/protocol.md) — message envelope
@@ -111,5 +121,11 @@ go/no-go checkpoint. The system is kept runnable after every work session.
 
 TCP transport endpoints and a two-process smoke demo are available; see
 [`docs/transport.md`](docs/transport.md#two-process-demo-and-buffering-falcon-028).
-Commander/Follower runtime wiring and the registration handshake remain pending
-the agent runtime modules.
+Actual Commander/Follower TCP sessions now support stateful commands,
+REPORT_STATUS-based registration, and bounded recovery after follower restart.
+See the [agent session commands](docs/transport.md#actual-agent-sessions-falcon-028029).
+Decision policy remains injected; the provided policy is a limited demonstration.
+
+The Docker MVP acceptance gate now checks real agents and both-side JSONL logs;
+see [the run guide](docs/mvp-running.md). Its injected demo policy is limited;
+full Phase-4 policy and later logging/role features remain separate work.

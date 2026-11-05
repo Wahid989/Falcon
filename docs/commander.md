@@ -208,3 +208,29 @@ otherwise directly against `src/schema/falcon-v1.json`.
 ```bash
 make test
 ```
+
+
+## Persistent registered TCP session
+
+Add `--interactive` to use the actual agent session runtime:
+
+```bash
+.venv/bin/python -m src.agents.commander_runner --interactive --follower follower-1=127.0.0.1:5000
+```
+
+This mode supports one follower, resolves hostnames to IPv4 at the agent layer, registers via
+REPORT_STATUS on every connection, and accepts commands from stdin until QUIT
+or EOF. PROCEED_TO_WAYPOINT takes its waypoint after a space; RECONNECT is a
+local session control, never a wire command. Broken links trigger bounded
+recovery and a DELIVERY_UNKNOWN report without replaying the command. Idle
+response timeouts alone do not reconnect. Defaults are 1-second initial backoff,
+a 30-second cap, and five extra attempts. The startup backoff in one-shot mode
+is also aligned to 1 second/cap 30 seconds. See
+[transport.md](transport.md#actual-agent-sessions-falcon-028029) for the Follower
+command, registration contract, restart demonstration, and acceptance tests.
+
+Interactive Commander sessions resolve Docker service names (for example
+`follower`) at the agent boundary on every connection attempt. DNS failures
+use the same bounded retry count; reconnect resolves again in case the service
+IP changed. The TCP backend remains IPv4-only. DNS uses the system resolver;
+the socket connect timeout starts after name resolution.

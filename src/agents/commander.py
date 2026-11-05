@@ -159,12 +159,14 @@ class Commander:
         validator: Validator | None = None,
         clock: Callable[[], str] = _utc_now,
         new_id: Callable[[], str] = _new_message_id,
+        exchange_log=None,
     ) -> None:
         self.agent_id = agent_id
         self.role_epoch = role_epoch
         self._validate = validator if validator is not None else default_validator()
         self._clock = clock
         self._new_id = new_id
+        self._exchange_log = exchange_log
         self._links: dict[str, _Link] = {}
 
     # --- followers -----------------------------------------------------------
@@ -260,6 +262,8 @@ class Commander:
             remaining = deadline - monotonic()
             try:
                 message = link.transport.receive(timeout=max(remaining, 0.0))
+                if self._exchange_log is not None:
+                    self._exchange_log.record("received", message)
             except TransportTimeoutError:
                 return self._timed_out(link, command)
             settled = self._accept(link, command, message)
@@ -300,9 +304,10 @@ class Commander:
         except KeyError:
             raise UnknownFollowerError(f"No link to follower {follower_id!r}") from None
 
-    @staticmethod
-    def _send(link: _Link, message: Message) -> None:
+    def _send(self, link: _Link, message: Message) -> None:
         link.transport.send(message)
+        if self._exchange_log is not None:
+            self._exchange_log.record("sent", message)
         link.pending.add(message["message_id"])
 
     @staticmethod

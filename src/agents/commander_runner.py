@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import socket
 import sys
@@ -35,6 +36,7 @@ from src.agents.commander import (
     Outcome,
     Validator,
 )
+from src.logging.exchange import ExchangeLogger, ExchangeLogError
 from src.transport import (
     ReconnectingTransport,
     TCPClientTransport,
@@ -109,7 +111,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ID=HOST:PORT",
         help="a follower to command; repeat for several (env FALCON_FOLLOWERS)",
     )
+    parser.add_argument("--log-dir", default=os.environ.get("FALCON_LOG_DIR"))
+    parser.add_argument(
+        "--session-id", default=os.environ.get("FALCON_SESSION_ID", "manual")
+    )
     parser.add_argument("--command", default="HOLD", choices=COMMANDS)
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="keep one registered session; read commands from stdin",
+    )
+    parser.add_argument("--initial-backoff", type=_positive, default=1.0)
+    parser.add_argument("--max-backoff", type=_positive, default=30.0)
     parser.add_argument("--waypoint", help="target for PROCEED_TO_WAYPOINT")
     parser.add_argument("--role-epoch", type=_non_negative_int, default=0)
     parser.add_argument(
@@ -155,7 +168,7 @@ def open_link(
     Compose service name is resolved here first. A container that is not up
     yet may not resolve either, so resolution shares the same retry budget.
     """
-    backoff = 0.5
+    backoff = 1.0
     attempt = 0
     while True:
         try:
@@ -165,13 +178,13 @@ def open_link(
             if attempt >= retries:
                 raise TransportError(f"Cannot resolve host {address.host!r}") from exc
             time.sleep(backoff)
-            backoff = min(backoff * 2, 5.0)
+            backoff = min(backoff * 2, 30.0)
             attempt += 1
     link = ReconnectingTransport(
         lambda: TCPClientTransport(ip, address.port, connect_timeout=connect_timeout),
         max_retries=retries - attempt,
         initial_backoff=backoff,
-        max_backoff=5.0,
+        max_backoff=30.0,
     )
     link.connect()
     return link
@@ -211,8 +224,14 @@ def run(
     connect: Callable[..., Transport] = open_link,
 ) -> int:
     followers = _followers_from(args)
+    if args.interactive:
+        return run_interactive(args, followers, out=out)
+    exchange_log = _exchange_logger(args, followers)
     commander = Commander(
-        args.agent_id, role_epoch=args.role_epoch, validator=validator
+        args.agent_id,
+        role_epoch=args.role_epoch,
+        validator=validator,
+        exchange_log=exchange_log,
     )
     # Fail on a bad command before opening any connection.
     for follower in followers:
@@ -288,6 +307,103 @@ def run(
     return EXIT_OK if answered == len(followers) else EXIT_UNANSWERED
 
 
+def _exchange_logger(args, followers):
+    if not args.log_dir:
+        return None
+    return ExchangeLogger(
+        args.log_dir,
+        args.agent_id,
+        session_id=args.session_id,
+        level=0,
+        peer_levels={f.follower_id: 1 for f in followers},
+    )
+
+
+def run_interactive(args, followers, *, out, source=None):
+    """Keep a registered session without replaying interrupted commands."""
+    from src.agents.tcp_runtime import CommanderSession, CommandInterruptedError
+
+    if len(followers) != 1:
+        raise ValueError("Interactive mode requires exactly one follower")
+    address = followers[0]
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    def report(record):
+        print(json.dumps(record, sort_keys=True), file=out, flush=True)
+
+    session = CommanderSession(
+        args.agent_id,
+        address.follower_id,
+        address.host,
+        address.port,
+        role_epoch=args.role_epoch,
+        timeout=args.timeout,
+        connect_timeout=args.connect_timeout,
+        max_retries=args.connect_retries,
+        initial_backoff=args.initial_backoff,
+        max_backoff=args.max_backoff,
+        report=report,
+        exchange_log=_exchange_logger(args, followers),
+    )
+    try:
+        session.connect()
+        for line in source if source is not None else sys.stdin:
+            parts = line.strip().split()
+            if not parts:
+                continue
+            if parts == ["QUIT"]:
+                return EXIT_OK
+            try:
+                if parts == ["RECONNECT"]:
+                    session.reconnect()
+                    continue
+                if len(parts) > 2 or (
+                    len(parts) == 2 and parts[0] != "PROCEED_TO_WAYPOINT"
+                ):
+                    raise ValueError(
+                        "Use COMMAND, PROCEED_TO_WAYPOINT NAME, RECONNECT, or QUIT"
+                    )
+                started = time.monotonic()
+                result = session.issue(
+                    parts[0], waypoint=parts[1] if len(parts) == 2 else None
+                )
+                report(_result_record(result, time.monotonic() - started))
+            except CommandInterruptedError as exc:
+                report(
+                    {
+                        "outcome": "DELIVERY_UNKNOWN",
+                        "message_id": exc.message_id,
+                        "recovered": exc.recovered,
+                        "unreachable": session.unreachable,
+                        "detail": str(exc),
+                    }
+                )
+            except (InvalidCommandError, ValueError) as exc:
+                report({"outcome": "INVALID_COMMAND", "detail": str(exc)})
+            except TransportError as exc:
+                report(
+                    {
+                        "outcome": (
+                            "UNREACHABLE" if session.unreachable else "LINK_FAILED"
+                        ),
+                        "detail": str(exc),
+                    }
+                )
+        return EXIT_OK
+    except TransportError as exc:
+        report(
+            {
+                "outcome": "UNREACHABLE" if session.unreachable else "LINK_FAILED",
+                "detail": str(exc),
+            }
+        )
+        return EXIT_UNANSWERED
+    except KeyboardInterrupt:
+        return EXIT_OK
+    finally:
+        session.close()
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -298,6 +414,9 @@ def main(
     args = parser.parse_args(argv)
     try:
         return run(args, out=out or sys.stdout, validator=validator)
+    except (OSError, ExchangeLogError) as exc:
+        print(f"Exchange logging failed: {exc}", file=sys.stderr)
+        return EXIT_UNANSWERED
     except (ValueError, InvalidCommandError) as exc:
         parser.print_usage(sys.stderr)
         print(f"{parser.prog}: error: {exc}", file=sys.stderr)

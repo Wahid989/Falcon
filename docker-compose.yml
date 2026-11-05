@@ -1,42 +1,56 @@
-# FALCON local development stack.
-#
-# Skeleton compose file: every service is a placeholder that builds and starts
-# without crashing so a new developer can bring the whole system up with a
-# single `docker compose up`. Real behaviour (agent runtimes, the .NET storage
-# API, framing, logging, etc.) is added by later work; the service names,
-# wiring, and ports defined here are the contract those pieces plug into.
-#
-# Services:
-#   commander    Python  - issues commands to Followers (one instance)
-#   follower     Python  - simulated agent that complies or declines (scaled later)
-#   storage-api  .NET     - ingests JSONL logs and exposes a query API
-#   sql-server   MSSQL    - persistent storage for ingested exchanges
+# Offline runtime MVP. Image construction may download pinned dependencies.
+# Storage is optional: docker compose --profile storage up --build.
+x-agent: &agent
+  build:
+    context: .
+    dockerfile: src/agents/Dockerfile
+  image: falcon-agent
+  volumes:
+    - ${FALCON_LOG_ROOT:-./logs}:/logs
+  environment: &agent-env
+    FALCON_LOG_DIR: /logs
+    FALCON_SESSION_ID: ${FALCON_SESSION_ID:-manual-mvp}
+  networks:
+    - falcon
+
+x-follower: &follower
+  <<: *agent
+  environment:
+    <<: *agent-env
+    FALCON_PRETTY_OUTPUT: "1"
+  command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-1", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/moving.yml"]
 
 services:
   commander:
-    build:
-      context: ./src/agents
-    image: falcon-agent
+    <<: *agent
+    command: ["python", "-m", "src.agents.commander_runner", "--timeout", "5", "--connect-timeout", "2", "--connect-retries", "5"]
     environment:
-      FALCON_ROLE: commander
-    networks:
-      - falcon
-    restart: unless-stopped
+      <<: *agent-env
+      FALCON_FOLLOWERS: ${FALCON_FOLLOWERS:-follower-1=follower:5000}
+    depends_on:
+      follower:
+        condition: service_started
 
   follower:
-    build:
-      context: ./src/agents
-    # Reuses the same image as the commander; the two differ only by role.
-    image: falcon-agent
-    environment:
-      FALCON_ROLE: follower
-    networks:
-      - falcon
-    restart: unless-stopped
-    # Followers are scaled to 10+ instances once the transport layer exists:
-    #   docker compose up --scale follower=10
+    <<: *follower
+
+  follower-2:
+    <<: *follower
+    profiles: [broadcast]
+    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-2", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/moving.yml"]
+
+  follower-3:
+    <<: *follower
+    profiles: [broadcast]
+    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-3", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/moving.yml"]
+
+  follower-low:
+    <<: *follower
+    profiles: [decline]
+    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-low", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/low-battery.yml"]
 
   storage-api:
+    profiles: [storage]
     build:
       # The storage/ context lets the image include the SQL init scripts.
       context: ./storage
@@ -48,7 +62,7 @@ services:
       ConnectionStrings__FalconDb: "${ConnectionStrings__FalconDb:-Server=sql-server,1433;Database=Falcon;User Id=sa;Password=Falcon_local_dev_1;TrustServerCertificate=True}"
     volumes:
       # JSONL exchange logs written by the agents. The service only reads them.
-      - ./logs:/logs:ro
+      - ${FALCON_LOG_ROOT:-./logs}:/logs:ro
     depends_on:
       sql-server:
         condition: service_healthy
@@ -59,6 +73,7 @@ services:
     restart: unless-stopped
 
   sql-server:
+    profiles: [storage]
     image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
       ACCEPT_EULA: "Y"
@@ -91,3 +106,4 @@ services:
 networks:
   falcon:
     driver: bridge
+    internal: true

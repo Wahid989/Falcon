@@ -1,87 +1,39 @@
-# Local Docker Setup
+# Local Docker setup
 
-This guide explains how to bring the FALCON stack up locally. At this stage
-every service is a placeholder skeleton — the goal is simply that a new
-developer can start all four services with one command and see them running.
+The default Compose project now runs the actual Commander and Follower over
+TCP. Both write JSONL logs to `./logs`. Follow the complete
+[MVP run guide](mvp-running.md) for the milestone gate, manual broadcast/decline,
+run evidence, and configuration.
 
-## Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) 20.10+
-- [Docker Compose](https://docs.docker.com/compose/) v2 (bundled with recent
-  Docker Desktop; invoked as `docker compose`)
-- Roughly 3 GB free disk for the SQL Server image
-
-No cloud account, internet service, or external language model is required —
-FALCON runs entirely offline.
-
-## Services
-
-| Service | Runtime | Purpose |
-| --- | --- | --- |
-| `commander` | Python | Issues commands to Followers (single instance) |
-| `follower` | Python | Simulated agent; complies or declines (scaled later) |
-| `storage-api` | .NET | Ingests JSONL logs and exposes a query API |
-| `sql-server` | Microsoft SQL Server | Persistent storage for ingested exchanges |
-
-The `commander` and `follower` services share one image (`falcon-agent`) and
-differ only by the `FALCON_ROLE` environment variable.
-
-## Bring the stack up
-
-From the repository root:
+Requires Docker Desktop/Engine with Compose v2. Initial image builds download
+Python 3.12 and pinned dependencies; the running agents use an internal network.
 
 ```bash
-docker compose up --build
+# One HOLD/COMPLY exchange; stop both when Commander exits.
+docker compose up --build --abort-on-container-exit --exit-code-from commander
+docker compose down
+
+# All acceptance cases, fresh session, evidence saved, automatic cleanup.
+.venv/bin/python -m scripts.run_mvp
 ```
 
-This builds the agent and storage images, pulls the SQL Server image, and
-starts all four services. The `commander`, `follower`, and `storage-api`
-containers currently run idle placeholder loops and log a single startup line;
-`sql-server` starts a real database engine.
+The `broadcast` profile adds follower-2/3; `decline` adds follower-low at 5%.
+These named services each have a unique identity/log file; blindly scaling a
+single named follower would duplicate its identity and is not the MVP setup.
+The one-shot Commander exits after its result; a persistent interactive mode
+is documented in [transport.md](transport.md#actual-agent-sessions-falcon-028029).
 
-Run it in the background instead with:
+SQL Server and the .NET API are optional and retain ports 1433/8080:
 
 ```bash
-docker compose up --build -d
-docker compose ps      # all four services should be listed as running
-docker compose logs    # view startup output
+cp config/.env.example .env
+docker compose --profile storage up -d --build sql-server storage-api
 ```
 
-## Configuration
+Configure local SQL credentials in the git-ignored .env. Storage details and
+platform requirements are in [database.md](database.md). Agent acceptance does
+not depend on SQL Server (particularly useful on ARM development machines).
 
-The SQL Server `sa` password defaults to a local development value. To override
-it, create a git-ignored `.env` file in the repository root:
-
-```dotenv
-MSSQL_SA_PASSWORD=Your_strong_Passw0rd
-```
-
-SQL Server requires a strong password (at least 8 characters including
-uppercase, lowercase, a digit, and a symbol) or the container will refuse to
-start. Never commit real credentials.
-
-## Scaling Followers
-
-Once the transport layer exists, multiple Followers can be started at once:
-
-```bash
-docker compose up --scale follower=10
-```
-
-## Bring the stack down
-
-```bash
-docker compose down          # stop and remove containers
-docker compose down -v       # also remove the SQL Server data volume
-```
-
-## Troubleshooting
-
-- **`sql-server` exits immediately** — the `sa` password does not meet
-  complexity requirements, or the host has less than 2 GB RAM allocated to
-  Docker. Check `docker compose logs sql-server`.
-- **Port already in use** — another process is bound to `1433` (SQL Server) or
-  `8080` (storage API). Stop it or change the host-side port mapping in
-  `docker-compose.yml`.
-- **Rebuild from scratch** — `docker compose build --no-cache` forces a clean
-  image rebuild.
+Inspect service output with `docker compose logs`; rebuild changed source with
+`docker compose build commander`. The full gate cleans up its unique project;
+manual profile runs should use matching profiles when running `down`.

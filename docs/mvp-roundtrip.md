@@ -100,3 +100,10 @@ matches the command it received, so responses are correlated by `message_id`.
   Commander and Follower agents (Himel, Maliha).
 - Transport, Docker Compose, and exchange logging belong to the plumbing
   (Munem).
+
+
+## Execute the contract
+
+See [mvp-running.md](mvp-running.md) for the Compose commands, both-side JSONL
+logs, automated single/broadcast/decline/state checks, timing evidence and CI.
+The gate uses RETURN at 5% battery; HOLD still complies at low battery.
