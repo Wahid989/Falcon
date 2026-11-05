@@ -67,6 +67,12 @@ not require movement) the follower still complies; the decline path is exercised
 by a movement command such as `PROCEED_TO_WAYPOINT` or `RETURN` under the forced
 low battery. Decline leaves state unchanged.
 
+The FALCON-031 `src.decision.decide` implementation applies this battery rule
+to `PROCEED_TO_WAYPOINT` and `RETURN` below 20%. `HOLD` and `REPORT_STATUS`
+remain available at low battery. This is the MVP decision slice, not the full
+Phase-4 policy for terrain, capability, mechanical fault, stale authority, or
+availability.
+
 ```json
 {
   "message_id": "<uuid>",
@@ -91,6 +97,14 @@ A broadcast is the same `HOLD` command sent to each of the three followers
 (`follower-1`, `follower-2`, `follower-3`) with `recipient_id` set per target.
 Each follower returns its own `COMPLY` (or `DECLINE`) whose `in_reply_to`
 matches the command it received, so responses are correlated by `message_id`.
+
+The TCP acceptance tests use the real Commander, Follower, production schema
+validator, and the decision function. Their response timeout is configurable
+with `FALCON_ACCEPTANCE_TIMEOUT` (seconds; default `5`). They verify response
+correlation and schema validity, distinct three-follower delivery, and
+domain-state preservation on a low-battery decline. The JSONL logging check is
+blocked until the agent-side exchange logger is implemented; runner output is
+not an exchange log.
 
 ## Contract ownership
 
