@@ -92,6 +92,65 @@ shortcuts `reason`, `state` and `error`. `outcome` is one of:
 One Commander is meant to be used from one thread, matching the transport's
 one-receive-loop-per-link guidance.
 
+## Running the Commander agent
+
+`src/agents/commander_runner.py` runs the Commander as its own process over
+TCP. Each follower listens with `TCPServerTransport`, and the Commander
+connects to it as a client, one link per follower.
+
+```bash
+# One follower: send HOLD and wait up to 5 s for the answer
+python -m src.agents.commander_runner --follower follower-1=127.0.0.1:5000
+
+# Broadcast to three followers
+python -m src.agents.commander_runner   --follower follower-1=follower-1:5000   --follower follower-2=follower-2:5000   --follower follower-3=follower-3:5000
+
+# The same, from the environment (for Docker Compose)
+FALCON_FOLLOWERS="follower-1=follower-1:5000,follower-2=follower-2:5000"   python -m src.agents.commander_runner
+```
+
+`make run-commander` (`python -m src.agents.commander`) does the same. It
+prints a harmless runpy warning, because the package already imports the
+module, so containers should use `src.agents.commander_runner`.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--follower ID=HOST:PORT` | `FALCON_FOLLOWERS` | A follower to command. Repeat it for several. A host name, such as a Compose service, is resolved to IPv4 before connecting. |
+| `--command` | `HOLD` | `HOLD`, `PROCEED_TO_WAYPOINT`, `RETURN` or `REPORT_STATUS`. |
+| `--waypoint` | — | Required for `PROCEED_TO_WAYPOINT` only. |
+| `--agent-id` | `FALCON_AGENT_ID`, otherwise `commander` | Must match each follower's configured `parent_id`. |
+| `--role-epoch` | `0` | Stamped on every command. |
+| `--timeout` | `5` | Seconds to wait for **all** responses, measured from the send. |
+| `--connect-timeout` | `5` | Seconds per connection attempt. |
+| `--connect-retries` | `5` | Extra attempts, with backoff, while followers start up. |
+
+The command is validated before any connection is opened. With several
+followers it is a broadcast, one message per follower.
+
+**Output.** There is one JSON line per follower, in the order given, and then a
+summary line:
+
+```json
+{"command": "HOLD", "follower": "follower-1", "latency_ms": 2.1, "message_id": "…", "outcome": "COMPLY"}
+{"command": "HOLD", "follower": "follower-2", "latency_ms": 2.4, "message_id": "…", "outcome": "DECLINE", "reason": "BATTERY_CRITICAL"}
+{"summary": {"answered": 2, "command": "HOLD", "followers": 2}}
+```
+
+`outcome` is one of the outcomes above, or one of:
+- `UNREACHABLE`: no connection after all the retries;
+- `SEND_FAILED`: the link broke while sending;
+- `LINK_FAILED`: the link broke while waiting.
+
+**Exit status:**
+- `0`: every follower answered with a valid response. A `DECLINE` counts,
+  because the round trip worked.
+- `1`: at least one follower timed out, answered invalidly, or couldn't be
+  reached.
+- `2`: bad arguments or an invalid command.
+
+This output is a run report, not the exchange log. JSONL exchange logging
+(FALCON-039) sits above the transport and is added separately.
+
 ## Not done here (later tickets)
 
 | Not done here | Ticket |
@@ -103,6 +162,17 @@ one-receive-loop-per-link guidance.
 | Hierarchy routing | FALCON-055 |
 
 ## Tests
+
+`tests/integration/test_commander_runner.py` (31 tests) runs the runner over
+real TCP against the Follower module:
+- HOLD → COMPLY within the timeout;
+- a broadcast to 3 followers;
+- a decline at 5% battery, with the follower's state unchanged;
+- a timeout and an unreachable follower, without hiding the other answers;
+- a follower that starts late;
+- host-name resolution;
+- bad arguments;
+- a run as a separate process.
 
 `tests/unit/test_commander.py` (48 tests) runs the Commander over
 `InMemoryTransport`. It covers:
