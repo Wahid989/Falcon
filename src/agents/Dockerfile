@@ -6,4 +6,4 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY src ./src
 COPY scripts ./scripts
 COPY config/mvp ./config/mvp
-CMD ["python", "-m", "src.agents.follower_runner", "--decision-engine", "scripts.tcp_agent_policy:decide"]
+CMD ["python", "-m", "src.agents.follower_runner", "--decision-engine", "src.decision.engine:decide"]

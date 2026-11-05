@@ -197,7 +197,7 @@ def run_checkpoint(followers, *, log_dir, session_id, timeout=5):
             "evidence": evidence,
             "low_battery_before": before["follower-low"],
             "low_battery_after": low_after,
-            "policy": "limited injected demo policy; full Phase-4 policy is separate",
+            "policy": "src.decision.decide (MVP battery policy)",
         }
     finally:
         for link in links:

@@ -176,12 +176,15 @@ default. FALCON_LOG_ROOT selects the host bind directory (default `./logs`).
 
 ## Decision policy and scope
 
-The current checkout supplies a DecisionEngine interface, not the complete
-Phase-4 policy. Compose explicitly injects `scripts.tcp_agent_policy:decide`.
-It handles the required movement battery/mechanical/obstacle guards and complies
-otherwise. It is not an unrestricted production policy or a replacement for the
-team's terrain/capability/busy/role decision-engine tickets. The real Follower
-performs validation, authority checks and state transitions in every MVP case.
+Compose uses the team's `src.decision.engine:decide` MVP implementation. It
+complies with HOLD/REPORT_STATUS and declines movement when battery is below
+20%, without mutating state. The real Follower performs validation, authority
+checks and state transitions. The full Phase-4 terrain/capability/mechanical/
+availability policy remains separate from this MVP decision slice.
+
+`--decision-engine MODULE:CALLABLE` can override the runner's default for explicit
+experiments. `scripts.tcp_agent_policy:decide` remains an optional older demo
+helper; it is not used by the Compose milestone gate.
 
 Normal followers start moving via `config/mvp/moving.yml` so HOLD has a visible
 effect. The low follower uses `config/mvp/low-battery.yml`, which sets battery to
@@ -227,7 +230,8 @@ the preceding uncommitted 028/029 runtime integration on which the MVP depends.
 
 ## Recorded local acceptance result
 
-The current implementation was verified on Docker Desktop (Linux ARM64 engine):
+Earlier local validation before integrating the newly merged team decision policy
+was recorded on Docker Desktop (Linux ARM64 engine):
 
 - Full Python suite: 403 passed in 4.45 seconds; Black and Flake8 passed.
 - Default two-service Compose command: exit 0, HOLD/COMPLY, both sides logged.
@@ -242,3 +246,14 @@ The current implementation was verified on Docker Desktop (Linux ARM64 engine):
 These are observed local results, not a claim that remote CI has already run.
 CI is wired and will independently reproduce the checkpoint after a push.
 Timings vary by machine; rerun the gate for a fresh decision and evidence.
+
+Before publishing the PR, the latest main branch policy and precise Commander
+latency reporting were integrated. The final GO/test results for that combined
+implementation are recorded in the PR and its fresh JSON report, rather than
+reinterpreting the earlier historical run above.
+
+Final pre-PR combined verification (team MVP policy from latest main):
+429 Python tests passed in 4.43 seconds; Black/Flake8 passed. The freshly rebuilt
+Docker gate returned GO for session `30c0c056617140f69b2b7eb7b6a45c3c` with all
+six checks true, HOLD 10.756 ms, maximum round trip 19.691 ms, broadcast 11.478 ms,
+and 28 envelopes / 56 JSONL records. Its policy is `src.decision.decide`.

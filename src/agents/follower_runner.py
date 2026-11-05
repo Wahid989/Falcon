@@ -25,7 +25,11 @@ def main(argv=None):
         "--session-id", default=os.environ.get("FALCON_SESSION_ID", "manual")
     )
     parser.add_argument("--state", help="YAML state overrides, loaded once at startup")
-    parser.add_argument("--decision-engine", required=True, metavar="MODULE:CALLABLE")
+    parser.add_argument(
+        "--decision-engine",
+        default="src.decision.engine:decide",
+        metavar="MODULE:CALLABLE",
+    )
     parser.add_argument("--max-commands", type=int)
     parser.add_argument(
         "--pretty",

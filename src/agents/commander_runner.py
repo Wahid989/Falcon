@@ -367,11 +367,11 @@ def run_interactive(args, followers, *, out, source=None):
                     raise ValueError(
                         "Use COMMAND, PROCEED_TO_WAYPOINT NAME, RECONNECT, or QUIT"
                     )
-                started = time.monotonic()
+                started = perf_counter()
                 result = session.issue(
                     parts[0], waypoint=parts[1] if len(parts) == 2 else None
                 )
-                report(_result_record(result, time.monotonic() - started))
+                report(_result_record(result, perf_counter() - started))
             except CommandInterruptedError as exc:
                 report(
                     {

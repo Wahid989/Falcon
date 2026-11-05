@@ -18,7 +18,7 @@ x-follower: &follower
   environment:
     <<: *agent-env
     FALCON_PRETTY_OUTPUT: "1"
-  command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-1", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/moving.yml"]
+  command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-1", "--decision-engine", "src.decision.engine:decide", "--state", "config/mvp/moving.yml"]
 
 services:
   commander:
@@ -37,17 +37,17 @@ services:
   follower-2:
     <<: *follower
     profiles: [broadcast]
-    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-2", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/moving.yml"]
+    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-2", "--decision-engine", "src.decision.engine:decide", "--state", "config/mvp/moving.yml"]
 
   follower-3:
     <<: *follower
     profiles: [broadcast]
-    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-3", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/moving.yml"]
+    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-3", "--decision-engine", "src.decision.engine:decide", "--state", "config/mvp/moving.yml"]
 
   follower-low:
     <<: *follower
     profiles: [decline]
-    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-low", "--decision-engine", "scripts.tcp_agent_policy:decide", "--state", "config/mvp/low-battery.yml"]
+    command: ["python", "-m", "src.agents.follower_runner", "--host", "0.0.0.0", "--port", "5000", "--agent-id", "follower-low", "--decision-engine", "src.decision.engine:decide", "--state", "config/mvp/low-battery.yml"]
 
   storage-api:
     profiles: [storage]

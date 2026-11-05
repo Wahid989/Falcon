@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from scripts.mvp_checkpoint import main, run_checkpoint, verify_logs
-from scripts.tcp_agent_policy import decide
+from src.decision import decide
 from src.agents.commander_runner import FollowerAddress
 from src.agents.tcp_runtime import FollowerTCPServer
 from src.logging.exchange import ExchangeLogger

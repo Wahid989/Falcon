@@ -102,9 +102,9 @@ The TCP acceptance tests use the real Commander, Follower, production schema
 validator, and the decision function. Their response timeout is configurable
 with `FALCON_ACCEPTANCE_TIMEOUT` (seconds; default `5`). They verify response
 correlation and schema validity, distinct three-follower delivery, and
-domain-state preservation on a low-battery decline. The JSONL logging check is
-blocked until the agent-side exchange logger is implemented; runner output is
-not an exchange log.
+domain-state preservation on a low-battery decline. Agent-side exchange logging is now implemented. The Compose gate verifies
+matching JSONL sent/received receipts on both agents; runner console output alone
+is not treated as exchange evidence. See [mvp-running.md](mvp-running.md).
 
 ## Contract ownership
 
