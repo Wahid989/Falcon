@@ -132,6 +132,12 @@ commands. The decision contract is defined in `src/decision/base.py`; it does
 not implement command policy. Until FALCON-019 supplies
 `src/schema/validator.py`, callers must inject a validator.
 
+The Commander/Follower round-trip tests use paired in-memory transports and
+inject a test validator backed by `src/schema/falcon-v1.json` with JSON Schema
+format checking. Their fixed comply/decline callbacks exercise message flow
+and state transitions only; they do not implement or verify the Phase-4
+decision rules.
+
 Logging belongs above the transport boundary: record successful sends/receives
 there, exclude heartbeats from exchange logs, and add `hierarchy_level` only to
 log records. Transport never adds it to a message. Timeouts are inputs to the
