@@ -66,3 +66,29 @@ def validate(message: Any) -> tuple[bool, list[str]]:
 def is_valid(message: Any) -> bool:
     """Convenience boolean form of :func:`validate`."""
     return _VALIDATOR.is_valid(message)
+
+
+class SchemaValidationError(ValueError):
+    """Raised by :func:`validate_or_raise` when a message violates the schema.
+
+    ``errors`` holds the individual error strings (each naming the failing field
+    where one applies); the exception message joins them.
+    """
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__("; ".join(errors) if errors else "invalid message")
+
+
+def validate_or_raise(message: Any) -> Any:
+    """Validate a message and return it, or raise :class:`SchemaValidationError`.
+
+    The send/receive guard: agents call this before putting a message on the
+    wire and immediately after decoding one, so every message in an exchange is
+    checked against the v1 contract. Returns the message unchanged when valid so
+    it can be used inline.
+    """
+    ok, errors = validate(message)
+    if not ok:
+        raise SchemaValidationError(errors)
+    return message
