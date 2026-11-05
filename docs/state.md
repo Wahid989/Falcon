@@ -53,6 +53,36 @@ A newly started follower:
 
 ## Forcing state for tests
 
-The state model will expose `force_state(overrides)` and a YAML loader
-(FALCON-020) so the scenario harness can drive any field to a specific value —
-used only in tests/harness, never on the normal runtime path.
+`src/state/FollowerState` implements this model. Values are validated when the
+object is created and whenever a field is assigned. `force_state(overrides)`
+is intended for tests and the scenario harness; it validates every field
+before applying any override, so an invalid override leaves the state
+unchanged.
+
+`load_scenario(path)` creates a fresh state from a YAML mapping of state-field
+overrides. Unspecified fields keep their documented defaults. For example:
+
+```yaml
+battery_percent: 15
+obstacle_detected: true
+```
+
+The loader uses safe YAML parsing and rejects non-mapping documents, unknown
+fields, and invalid values. These helpers are for tests and the harness, not
+the normal runtime path.
+
+## Command transitions
+
+`src/state/transitions.py` applies deterministic domain-state effects after the
+decision engine determines whether a command complies. Call
+`apply_command_transition(state, command, payload, complied=...)`; it returns a
+new state and a separate lifecycle path. The lifecycle progresses through
+`READY`, `COMMAND_RECEIVED`, and `EVALUATING`, then ends in `COMPLIED` or
+`DECLINED`. Lifecycle is not stored in `FollowerState` or included in its state
+snapshot.
+
+Complied `HOLD` clears movement and the active command;
+`PROCEED_TO_WAYPOINT` sets the position, movement flag, and active command;
+`RETURN` sets the position to `base` and starts movement; `REPORT_STATUS`
+leaves domain state unchanged. A declined command leaves all domain fields
+unchanged. This transition helper does not implement decision guards.
