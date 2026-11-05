@@ -70,3 +70,19 @@ obstacle_detected: true
 The loader uses safe YAML parsing and rejects non-mapping documents, unknown
 fields, and invalid values. These helpers are for tests and the harness, not
 the normal runtime path.
+
+## Command transitions
+
+`src/state/transitions.py` applies deterministic domain-state effects after the
+decision engine determines whether a command complies. Call
+`apply_command_transition(state, command, payload, complied=...)`; it returns a
+new state and a separate lifecycle path. The lifecycle progresses through
+`READY`, `COMMAND_RECEIVED`, and `EVALUATING`, then ends in `COMPLIED` or
+`DECLINED`. Lifecycle is not stored in `FollowerState` or included in its state
+snapshot.
+
+Complied `HOLD` clears movement and the active command;
+`PROCEED_TO_WAYPOINT` sets the position, movement flag, and active command;
+`RETURN` sets the position to `base` and starts movement; `REPORT_STATUS`
+leaves domain state unchanged. A declined command leaves all domain fields
+unchanged. This transition helper does not implement decision guards.
