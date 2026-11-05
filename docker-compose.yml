@@ -27,6 +27,7 @@ services:
     environment:
       <<: *agent-env
       FALCON_FOLLOWERS: ${FALCON_FOLLOWERS:-follower-1=follower:5000}
+      FALCON_PRETTY_OUTPUT: "1"
     depends_on:
       follower:
         condition: service_started

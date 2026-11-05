@@ -118,6 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--command", default="HOLD", choices=COMMANDS)
     parser.add_argument(
+        "--pretty",
+        action="store_true",
+        default=os.environ.get("FALCON_PRETTY_OUTPUT") == "1",
+        help="print indented JSON with space between terminal responses",
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         help="keep one registered session; read commands from stdin",
@@ -297,7 +303,7 @@ def run(
     order = {f.follower_id: i for i, f in enumerate(followers)}
     records.sort(key=lambda record: order[record["follower"]])
     for record in records:
-        print(json.dumps(record, sort_keys=True), file=out, flush=True)
+        _print_record(record, out=out, pretty=args.pretty)
 
     answered = sum(record["outcome"] in ANSWERED for record in records)
     summary = {
@@ -307,8 +313,13 @@ def run(
             "answered": answered,
         }
     }
-    print(json.dumps(summary, sort_keys=True), file=out, flush=True)
+    _print_record(summary, out=out, pretty=args.pretty)
     return EXIT_OK if answered == len(followers) else EXIT_UNANSWERED
+
+
+def _print_record(record, *, out, pretty):
+    text = json.dumps(record, sort_keys=True, indent=2 if pretty else None)
+    print(f"\n{text}\n" if pretty else text, file=out, flush=True)
 
 
 def _exchange_logger(args, followers):
@@ -333,7 +344,7 @@ def run_interactive(args, followers, *, out, source=None):
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     def report(record):
-        print(json.dumps(record, sort_keys=True), file=out, flush=True)
+        _print_record(record, out=out, pretty=args.pretty)
 
     session = CommanderSession(
         args.agent_id,

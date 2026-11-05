@@ -81,12 +81,16 @@ Logs are runtime evidence and are git-ignored. They are not committed test data.
 
 ## Minimal two-service demonstration
 
-Compose followers display requests, responses, and state as indented JSON with
+Compose agents display requests, responses, and state as indented JSON with
 blank lines between events. Rebuild/recreate with `docker compose up --build
 follower` to apply changes to an existing container. For a local non-Docker
-Follower, add `--pretty` or set FALCON_PRETTY_OUTPUT=1. Machine-oriented local
+Follower or Commander, add `--pretty` or set FALCON_PRETTY_OUTPUT=1. Machine-oriented local
 output remains one JSON object per line by default; exchange JSONL files always
 retain one record per line regardless of terminal display settings.
+Interactive Commander registration and command results also use this readable
+format. Rebuild the image (`docker compose build commander`) and start a new
+Commander session to update terminal 2. For a machine consumer of container
+stdout, pass `-e FALCON_PRETTY_OUTPUT=0` to `docker compose run`.
 
 This starts only the Commander and one Follower, sends HOLD, prints COMPLY,
 and stops both when the one-shot Commander exits:
