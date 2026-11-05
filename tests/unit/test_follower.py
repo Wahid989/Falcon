@@ -1,0 +1,286 @@
+"""Tests for receiving and responding to FALCON command messages."""
+
+import json
+from pathlib import Path
+
+from jsonschema import Draft202012Validator
+
+import pytest
+
+from src.agents import Follower, FollowerError, InvalidFollowerMessageError
+from src.decision import DecisionResult, DeclineReason
+from src.state import CommandLifecycle, FollowerState
+from src.transport import InMemoryTransport
+
+
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "src" / "schema" / "falcon-v1.json"
+with SCHEMA_PATH.open(encoding="utf-8") as schema_file:
+    VALIDATOR = Draft202012Validator(json.load(schema_file))
+
+
+def validate(message):
+    errors = sorted(VALIDATOR.iter_errors(message), key=str)
+    return not errors, [error.message for error in errors]
+
+
+def command_envelope(command, payload=None, **overrides):
+    message = {
+        "message_id": "command-1",
+        "sender_id": "commander-1",
+        "recipient_id": "follower-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "schema_version": 1,
+        "sender_role": "commander",
+        "role_epoch": 0,
+        "type": "command",
+        "payload": {"command": command, **(payload or {})},
+    }
+    message.update(overrides)
+    return message
+
+
+@pytest.fixture
+def connected_pair():
+    commander, follower = InMemoryTransport.pair()
+    commander.connect()
+    follower.connect()
+    yield commander, follower
+    commander.close()
+    follower.close()
+
+
+def make_follower(transport, decision, state=None):
+    return Follower(
+        agent_id="follower-1",
+        transport=transport,
+        decision_engine=decision,
+        state=state if state is not None else FollowerState(parent_id="commander-1"),
+        validator=validate,
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "payload", "state_overrides", "decision", "expected_state"),
+    [
+        (
+            "HOLD",
+            {},
+            {"movement_flag": True, "current_command": "RETURN"},
+            DecisionResult(True),
+            {"movement_flag": False, "current_command": None},
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "north-fence"},
+            {},
+            DecisionResult(True),
+            {
+                "position": "north-fence",
+                "movement_flag": True,
+                "current_command": "PROCEED_TO_WAYPOINT",
+            },
+        ),
+        (
+            "RETURN",
+            {},
+            {"position": "north-fence"},
+            DecisionResult(True),
+            {"position": "base", "movement_flag": True, "current_command": "RETURN"},
+        ),
+        (
+            "REPORT_STATUS",
+            {},
+            {"battery_percent": 42, "position": "north-fence"},
+            DecisionResult(True),
+            {"battery_percent": 42, "position": "north-fence"},
+        ),
+    ],
+)
+def test_complied_command_effects_and_correlated_responses(
+    connected_pair, command, payload, state_overrides, decision, expected_state
+):
+    commander, link = connected_pair
+    state = FollowerState(parent_id="commander-1", **state_overrides)
+    expected = FollowerState(parent_id="commander-1", **state_overrides)
+    expected.force_state(expected_state)
+    follower = make_follower(link, lambda *_: decision, state)
+    commander.send(command_envelope(command, payload))
+
+    result = follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert result is not None
+    assert result.request["message_id"] == "command-1"
+    assert result.lifecycle == (
+        CommandLifecycle.READY,
+        CommandLifecycle.COMMAND_RECEIVED,
+        CommandLifecycle.EVALUATING,
+        CommandLifecycle.COMPLIED,
+    )
+    assert follower.state == expected
+    for field, value in expected_state.items():
+        assert getattr(follower.state, field) == value
+    assert response["payload"]["in_reply_to"] == "command-1"
+    if command == "REPORT_STATUS":
+        assert response["payload"]["response"] == "STATUS_RESPONSE"
+        assert "hierarchy_level" not in response["payload"]["state"]
+        assert validate(response)[0]
+    else:
+        assert response["payload"]["response"] == "COMPLY"
+        assert validate(response)[0]
+
+
+def test_decline_preserves_domain_state_and_returns_reason(connected_pair):
+    commander, link = connected_pair
+    state = FollowerState(
+        parent_id="commander-1",
+        battery_percent=12,
+        position="north-fence",
+        movement_flag=True,
+        current_command="existing",
+        capabilities=["camera"],
+    )
+    before = FollowerState(
+        **{field: getattr(state, field) for field in FollowerState.__dataclass_fields__}
+    )
+    follower = make_follower(
+        link,
+        lambda *_: DecisionResult(False, DeclineReason.BATTERY_CRITICAL),
+        state,
+    )
+    commander.send(command_envelope("RETURN"))
+
+    result = follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert result is not None
+    assert result.lifecycle[-1] is CommandLifecycle.DECLINED
+    assert follower.state == before
+    assert response["payload"]["response"] == "DECLINE"
+    assert response["payload"]["reason"] == "BATTERY_CRITICAL"
+    assert validate(response)[0]
+
+
+def test_decision_receives_copied_state_payload_and_role_epoch(connected_pair):
+    commander, link = connected_pair
+    state = FollowerState(parent_id="commander-1", position="base")
+    seen = []
+
+    def decide(decision_state, command, payload, role_epoch):
+        seen.append((decision_state, command, payload, role_epoch))
+        decision_state.position = "decision-side-effect"
+        return DecisionResult(True)
+
+    follower = make_follower(link, decide, state)
+    commander.send(command_envelope("HOLD", role_epoch=4))
+    follower.handle_once(timeout=0)
+
+    assert seen[0][1:] == ("HOLD", {}, 4)
+    assert seen[0][0] is not state
+    assert state.position == "base"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_code"),
+    [
+        ({"recipient_id": "another-agent"}, "INVALID_SENDER_OR_RECIPIENT"),
+        ({"sender_id": "stranger"}, "UNAUTHORIZED"),
+        ({"sender_role": "follower"}, "UNAUTHORIZED"),
+    ],
+)
+def test_authority_failures_send_error_without_deciding(
+    connected_pair, overrides, error_code
+):
+    commander, link = connected_pair
+    calls = []
+    follower = make_follower(link, lambda *args: calls.append(args))
+    commander.send(command_envelope("HOLD", **overrides))
+
+    result = follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert result is not None
+    assert result.decision is None
+    assert calls == []
+    assert response["payload"]["response"] == "ERROR"
+    assert response["payload"]["error"]["code"] == error_code
+    assert validate(response)[0]
+
+
+def test_schema_invalid_command_gets_protocol_error(connected_pair):
+    commander, link = connected_pair
+    follower = make_follower(link, lambda *_: pytest.fail("decision must not run"))
+    commander.send(command_envelope("FLY"))
+
+    result = follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert result is not None
+    assert result.decision is None
+    assert response["payload"]["error"]["code"] == "UNSUPPORTED_COMMAND"
+    assert response["payload"]["in_reply_to"] == "command-1"
+    assert validate(response)[0]
+
+
+def test_stale_epoch_gets_error_without_calling_decision(connected_pair):
+    commander, link = connected_pair
+    calls = []
+    follower = make_follower(
+        link,
+        lambda *args: calls.append(args),
+        FollowerState(parent_id="commander-1", role_epoch=2),
+    )
+    commander.send(command_envelope("HOLD", role_epoch=1))
+
+    result = follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert result is not None
+    assert result.decision is None
+    assert calls == []
+    assert response["payload"]["response"] == "ERROR"
+    assert response["payload"]["error"]["code"] == "STALE_EPOCH"
+    assert response["payload"]["in_reply_to"] == "command-1"
+    assert validate(response)[0]
+
+
+def test_invalid_sender_id_does_not_get_an_invalid_error_response(connected_pair):
+    commander, link = connected_pair
+    follower = make_follower(link, lambda *_: pytest.fail("decision must not run"))
+    commander.send(command_envelope("HOLD", sender_id="invalid sender"))
+
+    with pytest.raises(InvalidFollowerMessageError, match="invalid sender_id"):
+        follower.handle_once(timeout=0)
+
+    assert follower.state == FollowerState(parent_id="commander-1")
+
+
+def test_non_command_message_is_ignored(connected_pair):
+    commander, link = connected_pair
+    follower = make_follower(link, lambda *_: pytest.fail("decision must not run"))
+    heartbeat = {
+        "message_id": "heartbeat-1",
+        "sender_id": "commander-1",
+        "recipient_id": "follower-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "schema_version": 1,
+        "sender_role": "commander",
+        "role_epoch": 0,
+        "type": "heartbeat",
+        "payload": {"status": {"battery_percent": 100}},
+    }
+    commander.send(heartbeat)
+
+    assert follower.handle_once(timeout=0) is None
+
+
+def test_default_validator_reports_missing_falcon_019_module(connected_pair):
+    _, link = connected_pair
+
+    with pytest.raises(FollowerError, match="No message validator is available"):
+        Follower(
+            agent_id="follower-1",
+            transport=link,
+            decision_engine=lambda *_: DecisionResult(True),
+            state=FollowerState(parent_id="commander-1"),
+        )

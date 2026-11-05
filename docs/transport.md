@@ -124,6 +124,14 @@ responses. Both modules own response correlation using `message_id` and
 `payload.in_reply_to`; receiving returns the next message, which may be a
 heartbeat or unrelated response. Transport does not retry or deduplicate.
 
+The Follower runtime accepts an injected `Transport`, message validator, and
+decision callable. It uses `FollowerState.parent_id` to authorize its
+commander, passes the current state, command, payload, and message epoch to the
+decision callable, then applies the deterministic transition only to compliant
+commands. The decision contract is defined in `src/decision/base.py`; it does
+not implement command policy. Until FALCON-019 supplies
+`src/schema/validator.py`, callers must inject a validator.
+
 Logging belongs above the transport boundary: record successful sends/receives
 there, exclude heartbeats from exchange logs, and add `hierarchy_level` only to
 log records. Transport never adds it to a message. Timeouts are inputs to the
