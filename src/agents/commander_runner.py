@@ -24,6 +24,7 @@ import os
 import socket
 import sys
 import time
+from time import perf_counter
 from dataclasses import dataclass
 from re import fullmatch
 from typing import Callable, Sequence, TextIO
@@ -208,7 +209,7 @@ def _result_record(result: CommandResult, latency: float) -> dict[str, object]:
         result.command["payload"]["command"],
         result.outcome.value,
         message_id=result.command["message_id"],
-        latency_ms=round(latency * 1000, 1),
+        latency_ms=round(latency * 1000, 2),
         reason=result.reason,
         error=result.error,
         state=result.state,
@@ -263,6 +264,9 @@ def run(
             commander.add_follower(follower.follower_id, link)
 
         sent_at = time.monotonic()
+        # Latency uses perf_counter: monotonic() ticks only every ~16 ms on
+        # Windows, which made fast replies report as 0 ms.
+        started = perf_counter()
         broadcast = commander.broadcast(args.command, waypoint=args.waypoint)
         for follower_id, exc in broadcast.failed.items():
             records.append(
@@ -285,7 +289,7 @@ def run(
                     )
                 )
                 continue
-            records.append(_result_record(result, time.monotonic() - sent_at))
+            records.append(_result_record(result, perf_counter() - started))
     finally:
         for link in links:
             link.close()

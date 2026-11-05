@@ -1,12 +1,9 @@
-"""Commander runner over real TCP against the Follower module.
-
-The follower decision callback here is a deterministic stand-in (decline when
-battery is below 10%), not the project's decision policy.
-"""
+"""Commander runner over real TCP against the production Follower policy."""
 
 import copy
 import io
 import json
+import math
 import os
 import socket
 import subprocess
@@ -18,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from src.agents import Follower
+from src.agents import commander_runner
 from src.agents.commander_runner import (
     EXIT_OK,
     EXIT_UNANSWERED,
@@ -25,18 +23,33 @@ from src.agents.commander_runner import (
     main,
     parse_follower,
 )
-from src.decision import DecisionResult, DeclineReason
-from src.state import FollowerState
+from src.schema.validator import validate
+from src.state import CommandLifecycle, FollowerState
 from src.transport import TCPServerTransport, TransportError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMMANDER_ID = "commander"
+ACCEPTANCE_TIMEOUT_SECONDS = float(os.environ.get("FALCON_ACCEPTANCE_TIMEOUT", "5"))
+PEER_CLEANUP_TIMEOUT_SECONDS = max(ACCEPTANCE_TIMEOUT_SECONDS + 5, 10)
+
+if not math.isfinite(ACCEPTANCE_TIMEOUT_SECONDS) or not (
+    0 < ACCEPTANCE_TIMEOUT_SECONDS <= 60
+):
+    raise ValueError("FALCON_ACCEPTANCE_TIMEOUT must be between 0 and 60 seconds")
+
+_FOLLOWERS = []
+_SILENT_PEERS = []
 
 
-def battery_policy(state, command, payload, epoch):
-    if state.battery_percent < 10:
-        return DecisionResult(False, DeclineReason.BATTERY_CRITICAL)
-    return DecisionResult(True)
+@pytest.fixture(autouse=True)
+def cleanup_tcp_peers():
+    yield
+    for peer in _SILENT_PEERS:
+        peer.stop()
+    _SILENT_PEERS.clear()
+    for follower in _FOLLOWERS:
+        follower.close()
+    _FOLLOWERS.clear()
 
 
 class FollowerProcess:
@@ -51,27 +64,39 @@ class FollowerProcess:
         self.result = None
         self.error = None
         self._start_delay = start_delay
+        self._ready = threading.Event()
         if not start_delay:
             self.port = self.server.listen()[1]
+            self._ready.set()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        _FOLLOWERS.append(self)
 
     def _run(self):
         try:
             if self._start_delay:
                 time.sleep(self._start_delay)
+                self.port = self.server.listen()[1]
+                self._ready.set()
             self.server.connect()
             self.follower = Follower(
                 agent_id=self.agent_id,
                 transport=self.server,
-                decision_engine=battery_policy,
                 state=self._initial_state,
             )
-            self.result = self.follower.handle_once(timeout=10)
-        except (TransportError, Exception) as exc:  # surfaced through .error
+            self.result = self.follower.handle_once(
+                timeout=PEER_CLEANUP_TIMEOUT_SECONDS
+            )
+        except Exception as exc:  # surfaced through .error
             self.error = exc
         finally:
+            self._ready.set()
             self.server.close()
+
+    def wait_ready(self, timeout=PEER_CLEANUP_TIMEOUT_SECONDS):
+        """Wait until the TCP listener is bound or its startup has failed."""
+        assert self._ready.wait(timeout), "Follower did not become ready in time"
+        assert self.error is None, self.error
 
     @property
     def state(self):
@@ -83,9 +108,14 @@ class FollowerProcess:
         return f"{self.agent_id}=127.0.0.1:{self.port}"
 
     def join(self):
-        self._thread.join(timeout=10)
+        self._thread.join(timeout=PEER_CLEANUP_TIMEOUT_SECONDS)
         assert not self._thread.is_alive()
         assert self.error is None, self.error
+
+    def close(self):
+        self.server.close()
+        self._thread.join(timeout=PEER_CLEANUP_TIMEOUT_SECONDS)
+        assert not self._thread.is_alive(), "Follower thread did not stop"
 
 
 class SilentPeer:
@@ -97,6 +127,7 @@ class SilentPeer:
         self._done = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        _SILENT_PEERS.append(self)
 
     def _run(self):
         try:
@@ -110,7 +141,9 @@ class SilentPeer:
 
     def stop(self):
         self._done.set()
-        self._thread.join(timeout=10)
+        self.server.close()
+        self._thread.join(timeout=PEER_CLEANUP_TIMEOUT_SECONDS)
+        assert not self._thread.is_alive(), "Silent peer thread did not stop"
 
 
 def free_port():
@@ -137,8 +170,15 @@ def moving():
 
 def test_hold_round_trip_completes_within_timeout():
     follower = FollowerProcess("follower-1", moving())
+    follower.wait_ready()
+    timeout = ACCEPTANCE_TIMEOUT_SECONDS
     code, records, summary = run_cli(
-        "--follower", follower.spec, "--timeout", "5", "--connect-retries", "0"
+        "--follower",
+        follower.spec,
+        "--timeout",
+        str(timeout),
+        "--connect-retries",
+        "0",
     )
     follower.join()
 
@@ -147,10 +187,18 @@ def test_hold_round_trip_completes_within_timeout():
     assert record["follower"] == "follower-1"
     assert record["command"] == "HOLD"
     assert record["outcome"] == "COMPLY"
-    assert record["latency_ms"] < 5000
+    assert record["latency_ms"] < timeout * 1000
     assert summary == {"command": "HOLD", "followers": 1, "answered": 1}
     # The follower saw the same command the commander reports.
     assert follower.result.request["message_id"] == record["message_id"]
+    assert validate(follower.result.request) == (True, [])
+    assert validate(follower.result.response) == (True, [])
+    assert follower.result.response["payload"]["response"] == "COMPLY"
+    assert (
+        follower.result.response["payload"]["in_reply_to"]
+        == follower.result.request["message_id"]
+    )
+    assert follower.result.response["recipient_id"] == COMMANDER_ID
     # HOLD stops the follower.
     assert follower.state.movement_flag is False
     assert follower.state.current_command is None
@@ -187,19 +235,59 @@ def test_proceed_to_waypoint_carries_waypoint():
 
 
 def test_decline_at_low_battery_preserves_state():
-    state = FollowerState(parent_id=COMMANDER_ID, battery_percent=5)
+    state = FollowerState(parent_id=COMMANDER_ID)
+    state.force_state({"battery_percent": 5})
     before = copy.deepcopy(state)
     follower = FollowerProcess("follower-1", state)
 
-    code, (record,), summary = run_cli("--follower", follower.spec)
+    code, (record,), summary = run_cli(
+        "--follower", follower.spec, "--command", "RETURN"
+    )
     follower.join()
 
     # A decline is still a valid answer, so the round trip itself succeeded.
     assert code == EXIT_OK
+    assert record["command"] == "RETURN"
     assert record["outcome"] == "DECLINE"
     assert record["reason"] == "BATTERY_CRITICAL"
     assert summary["answered"] == 1
+    assert validate(follower.result.request) == (True, [])
+    assert validate(follower.result.response) == (True, [])
+    assert (
+        follower.result.response["payload"]["in_reply_to"]
+        == follower.result.request["message_id"]
+    )
+    assert follower.result.lifecycle == (
+        CommandLifecycle.READY,
+        CommandLifecycle.COMMAND_RECEIVED,
+        CommandLifecycle.EVALUATING,
+        CommandLifecycle.DECLINED,
+    )
     assert follower.state == before
+
+
+def test_low_battery_hold_and_status_follow_non_movement_rules():
+    hold_state = FollowerState(parent_id=COMMANDER_ID, battery_percent=5)
+    hold_follower = FollowerProcess("follower-1", hold_state)
+    code, (record,), _ = run_cli("--follower", hold_follower.spec)
+    hold_follower.join()
+
+    assert code == EXIT_OK
+    assert record["outcome"] == "COMPLY"
+    assert hold_follower.state == hold_state
+
+    status_state = FollowerState(parent_id=COMMANDER_ID, battery_percent=5)
+    status_before = copy.deepcopy(status_state)
+    status_follower = FollowerProcess("follower-2", status_state)
+    code, (record,), _ = run_cli(
+        "--follower", status_follower.spec, "--command", "REPORT_STATUS"
+    )
+    status_follower.join()
+
+    assert code == EXIT_OK
+    assert record["outcome"] == "STATUS_RESPONSE"
+    assert record["state"]["battery_percent"] == 5
+    assert status_follower.state == status_before
 
 
 # --- broadcast ------------------------------------------------------------------
@@ -207,6 +295,8 @@ def test_decline_at_low_battery_preserves_state():
 
 def test_broadcast_reaches_three_followers():
     followers = [FollowerProcess(f"follower-{n}", moving()) for n in (1, 2, 3)]
+    for follower in followers:
+        follower.wait_ready()
     args = []
     for follower in followers:
         args += ["--follower", follower.spec]
@@ -224,30 +314,50 @@ def test_broadcast_reaches_three_followers():
     assert {r["outcome"] for r in records} == {"COMPLY"}
     assert len({r["message_id"] for r in records}) == 3
     assert summary == {"command": "HOLD", "followers": 3, "answered": 3}
+    assert len({follower.agent_id for follower in followers}) == 3
     for follower in followers:
         assert follower.result.request["recipient_id"] == follower.agent_id
+        assert validate(follower.result.request) == (True, [])
+        assert validate(follower.result.response) == (True, [])
+        assert follower.result.response["payload"]["response"] == "COMPLY"
+        assert (
+            follower.result.response["payload"]["in_reply_to"]
+            == follower.result.request["message_id"]
+        )
+        assert follower.result.response["recipient_id"] == COMMANDER_ID
         assert follower.state.movement_flag is False
 
 
 def test_broadcast_with_one_low_battery_follower():
-    low = FollowerState(parent_id=COMMANDER_ID, battery_percent=5)
+    low = FollowerState(parent_id=COMMANDER_ID)
+    low.force_state({"battery_percent": 5})
     low_before = copy.deepcopy(low)
     followers = [
         FollowerProcess("follower-1"),
         FollowerProcess("follower-2", low),
         FollowerProcess("follower-3"),
     ]
+    for follower in followers:
+        follower.wait_ready()
     args = []
     for follower in followers:
         args += ["--follower", follower.spec]
 
-    code, records, _ = run_cli(*args)
+    code, records, _ = run_cli(*args, "--command", "RETURN")
     for follower in followers:
         follower.join()
 
     assert code == EXIT_OK
     assert [r["outcome"] for r in records] == ["COMPLY", "DECLINE", "COMPLY"]
     assert records[1]["reason"] == "BATTERY_CRITICAL"
+    low_result = followers[1].result
+    assert validate(low_result.request) == (True, [])
+    assert validate(low_result.response) == (True, [])
+    assert (
+        low_result.response["payload"]["in_reply_to"]
+        == low_result.request["message_id"]
+    )
+    assert low_result.lifecycle[-1] is CommandLifecycle.DECLINED
     assert low == low_before
 
 
@@ -256,10 +366,14 @@ def test_broadcast_with_one_low_battery_follower():
 
 def test_silent_follower_times_out():
     peer = SilentPeer()
+    timeout = min(ACCEPTANCE_TIMEOUT_SECONDS, 0.3)
     try:
         start = time.monotonic()
         code, (record,), summary = run_cli(
-            "--follower", f"quiet=127.0.0.1:{peer.port}", "--timeout", "0.3"
+            "--follower",
+            f"quiet=127.0.0.1:{peer.port}",
+            "--timeout",
+            str(timeout),
         )
         elapsed = time.monotonic() - start
     finally:
@@ -274,6 +388,7 @@ def test_silent_follower_times_out():
 def test_one_timeout_does_not_hide_other_answers():
     peer = SilentPeer()
     follower = FollowerProcess("follower-1")
+    follower.wait_ready()
     try:
         code, records, summary = run_cli(
             "--follower",
@@ -428,3 +543,32 @@ def test_runs_as_a_separate_process():
     assert completed.returncode == EXIT_OK, completed.stderr
     record = json.loads(completed.stdout.splitlines()[0])
     assert record["outcome"] == "COMPLY"
+
+
+# --- latency --------------------------------------------------------------------
+
+
+def test_latency_is_measured_with_a_precise_clock(monkeypatch):
+    # The runner must time replies with perf_counter. On Windows, monotonic()
+    # only ticks every ~16 ms, so fast replies used to show as 0 ms.
+    ticks = iter([100.0, 100.0042])
+    monkeypatch.setattr(commander_runner, "perf_counter", lambda: next(ticks))
+    follower = FollowerProcess("follower-1")
+    follower.wait_ready()
+
+    code, (record,), _ = run_cli("--follower", follower.spec)
+    follower.join()
+
+    assert code == EXIT_OK
+    assert record["latency_ms"] == 4.2
+
+
+def test_real_round_trip_reports_nonzero_latency():
+    follower = FollowerProcess("follower-1")
+    follower.wait_ready()
+
+    code, (record,), _ = run_cli("--follower", follower.spec)
+    follower.join()
+
+    assert code == EXIT_OK
+    assert record["latency_ms"] > 0

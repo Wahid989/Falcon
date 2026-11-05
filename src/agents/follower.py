@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from re import fullmatch
 from typing import Callable
 
-from src.decision import DecisionEngine, DecisionResult
+from src.decision import DecisionEngine, DecisionResult, decide
 from src.state import (
     CommandLifecycle,
     FollowerState,
@@ -66,15 +66,15 @@ class FollowerResult:
 class Follower:
     """Receive one command and return a correlated response.
 
-    The validator and decision engine are injected so this module can be used
-    before the FALCON-019 validator and Phase-4 policy are implemented.
+    The validator and decision engine can be injected. By default, the
+    production schema validator and FALCON-031 decision policy are used.
     """
 
     def __init__(
         self,
         agent_id: str,
         transport: Transport,
-        decision_engine: DecisionEngine,
+        decision_engine: DecisionEngine | None = None,
         state: FollowerState | None = None,
         validator: Validator | None = None,
         exchange_log=None,
@@ -86,7 +86,7 @@ class Follower:
             raise ValueError("agent_id must contain only letters, digits, '_' or '-'")
         if not isinstance(transport, Transport):
             raise TypeError("transport must implement Transport")
-        if not callable(decision_engine):
+        if decision_engine is not None and not callable(decision_engine):
             raise TypeError("decision_engine must be callable")
 
         self._exchange_log = exchange_log
@@ -95,7 +95,9 @@ class Follower:
         self.state = state if state is not None else FollowerState()
         if not isinstance(self.state, FollowerState):
             raise TypeError("state must be a FollowerState")
-        self._decision_engine = decision_engine
+        self._decision_engine = (
+            decision_engine if decision_engine is not None else decide
+        )
         self._validate = validator if validator is not None else default_validator()
 
     def handle_once(self, timeout: float) -> FollowerResult | None:
