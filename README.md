@@ -83,6 +83,7 @@ The v1 protocol is specified in [`src/schema/falcon-v1.json`](src/schema/falcon-
 and documented here:
 
 - [`docs/transport.md`](docs/transport.md) — transport API, in-memory pairs, TCP demo, recovery, and agent handoff
+- [`docs/commander.md`](docs/commander.md) — Commander module: building, sending and correlating commands
 - [`docs/protocol.md`](docs/protocol.md) — message envelope
 - [`docs/vocabulary.md`](docs/vocabulary.md) — commands, responses, decline reasons, role/heartbeat messages
 - [`docs/state.md`](docs/state.md) — simulated follower state
