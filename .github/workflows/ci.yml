@@ -39,7 +39,7 @@ jobs:
         run: flake8 .
 
       - name: Run tests (pytest)
-        run: python -m pytest tests/ -v
+        run: timeout 30s python -m pytest tests/ -v
 
   dotnet:
     name: .NET (build)
