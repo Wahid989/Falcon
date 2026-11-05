@@ -7,7 +7,7 @@ from jsonschema import Draft202012Validator
 
 import pytest
 
-from src.agents import Follower, FollowerError, InvalidFollowerMessageError
+from src.agents import Follower, InvalidFollowerMessageError
 from src.decision import DecisionResult, DeclineReason
 from src.state import CommandLifecycle, FollowerState
 from src.transport import InMemoryTransport
@@ -274,13 +274,19 @@ def test_non_command_message_is_ignored(connected_pair):
     assert follower.handle_once(timeout=0) is None
 
 
-def test_default_validator_reports_missing_falcon_019_module(connected_pair):
+def test_default_validator_uses_falcon_019_module(connected_pair):
     _, link = connected_pair
 
-    with pytest.raises(FollowerError, match="No message validator is available"):
-        Follower(
-            agent_id="follower-1",
-            transport=link,
-            decision_engine=lambda *_: DecisionResult(True),
-            state=FollowerState(parent_id="commander-1"),
-        )
+    # FALCON-019 is now merged, so the default validator is the real schema
+    # validator and the Follower constructs without an injected validator.
+    from src.agents.follower import default_validator
+    from src.schema.validator import validate as falcon_validate
+
+    assert default_validator() is falcon_validate
+    follower = Follower(
+        agent_id="follower-1",
+        transport=link,
+        decision_engine=lambda *_: DecisionResult(True),
+        state=FollowerState(parent_id="commander-1"),
+    )
+    assert follower is not None
