@@ -13,6 +13,14 @@ class TransportError(Exception):
     """Base class for transport failures."""
 
 
+class TransportConnectionError(TransportError):
+    """Connection setup failed; callers may retry with a fresh endpoint."""
+
+
+class TransportUnreachableError(TransportConnectionError):
+    """The configured connection retry window was exhausted."""
+
+
 class TransportNotConnectedError(TransportError):
     """The local endpoint or its peer has not connected yet."""
 
@@ -22,7 +30,7 @@ class TransportClosedError(TransportError):
 
 
 class TransportTimeoutError(TransportError):
-    """No message arrived before the receive deadline."""
+    """A transport operation did not finish before its deadline."""
 
 
 class TransportMessageError(TransportError):

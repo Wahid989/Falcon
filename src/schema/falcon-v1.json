@@ -171,7 +171,7 @@
             "required": ["command"]
           },
           "then": { "required": ["waypoint"] },
-          "else": { "properties": { "waypoint": false } }
+          "else": { "not": { "required": ["waypoint"] } }
         }
       ]
     },

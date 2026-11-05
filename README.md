@@ -82,7 +82,7 @@ docker compose up --build
 The v1 protocol is specified in [`src/schema/falcon-v1.json`](src/schema/falcon-v1.json)
 and documented here:
 
-- [`docs/transport.md`](docs/transport.md) — synchronous interface, in-memory pairs, and agent handoff
+- [`docs/transport.md`](docs/transport.md) — transport API, in-memory pairs, TCP demo, recovery, and agent handoff
 - [`docs/commander.md`](docs/commander.md) — Commander module: building, sending and correlating commands
 - [`docs/protocol.md`](docs/protocol.md) — message envelope
 - [`docs/vocabulary.md`](docs/vocabulary.md) — commands, responses, decline reasons, role/heartbeat messages
@@ -108,3 +108,8 @@ build follows a layered plan — Foundation → Protocol → single-pair MVP →
 decision engine → logging/DB → role switching → hierarchy → disconnect
 recovery → test harness → CI/CD → demo. The MVP round trip (FALCON-031) is the
 go/no-go checkpoint. The system is kept runnable after every work session.
+
+TCP transport endpoints and a two-process smoke demo are available; see
+[`docs/transport.md`](docs/transport.md#two-process-demo-and-buffering-falcon-028).
+Commander/Follower runtime wiring and the registration handshake remain pending
+the agent runtime modules.
