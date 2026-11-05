@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from src.agents import Follower
+from src.agents import commander_runner
 from src.agents.commander_runner import (
     EXIT_OK,
     EXIT_UNANSWERED,
@@ -542,3 +543,32 @@ def test_runs_as_a_separate_process():
     assert completed.returncode == EXIT_OK, completed.stderr
     record = json.loads(completed.stdout.splitlines()[0])
     assert record["outcome"] == "COMPLY"
+
+
+# --- latency --------------------------------------------------------------------
+
+
+def test_latency_is_measured_with_a_precise_clock(monkeypatch):
+    # The runner must time replies with perf_counter. On Windows, monotonic()
+    # only ticks every ~16 ms, so fast replies used to show as 0 ms.
+    ticks = iter([100.0, 100.0042])
+    monkeypatch.setattr(commander_runner, "perf_counter", lambda: next(ticks))
+    follower = FollowerProcess("follower-1")
+    follower.wait_ready()
+
+    code, (record,), _ = run_cli("--follower", follower.spec)
+    follower.join()
+
+    assert code == EXIT_OK
+    assert record["latency_ms"] == 4.2
+
+
+def test_real_round_trip_reports_nonzero_latency():
+    follower = FollowerProcess("follower-1")
+    follower.wait_ready()
+
+    code, (record,), _ = run_cli("--follower", follower.spec)
+    follower.join()
+
+    assert code == EXIT_OK
+    assert record["latency_ms"] > 0
