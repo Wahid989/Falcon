@@ -53,6 +53,20 @@ A newly started follower:
 
 ## Forcing state for tests
 
-The state model will expose `force_state(overrides)` and a YAML loader
-(FALCON-020) so the scenario harness can drive any field to a specific value —
-used only in tests/harness, never on the normal runtime path.
+`src/state/FollowerState` implements this model. Values are validated when the
+object is created and whenever a field is assigned. `force_state(overrides)`
+is intended for tests and the scenario harness; it validates every field
+before applying any override, so an invalid override leaves the state
+unchanged.
+
+`load_scenario(path)` creates a fresh state from a YAML mapping of state-field
+overrides. Unspecified fields keep their documented defaults. For example:
+
+```yaml
+battery_percent: 15
+obstacle_detected: true
+```
+
+The loader uses safe YAML parsing and rejects non-mapping documents, unknown
+fields, and invalid values. These helpers are for tests and the harness, not
+the normal runtime path.
