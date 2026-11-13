@@ -126,6 +126,21 @@ chain. A middle agent at level 1 therefore logs:
 - what it receives from its commander at level 0;
 - what it receives from its followers at level 2.
 
+### When a link dies
+
+Each link has its own reader, so a dead link only affects the module that
+uses it.
+- **Upstream link down:** `serve_once` raises `TransportClosedError`, while
+  the Commander module keeps commanding the followers.
+- **One follower's link down:** orders to that follower fail at once, with no
+  hang, while the other followers and the commander above are unaffected.
+
+`agent.link_is_down(peer)` tells the runtime which link died.
+`agent.replace_link(peer, new_link)` swaps in a fresh link once that peer
+reconnects. The module carries on over it, and the old link is retired: a
+late message on it is ignored, and its closing doesn't affect the new one.
+The exchange log stays whole, because every record is one complete line.
+
 ## Relaying commands down the chain
 
 In the sponsor's case, Ground talks only to the Drone Commander, never to the
