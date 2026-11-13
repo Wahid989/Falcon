@@ -278,6 +278,34 @@ class Hierarchy:
         parents[self._top] = agent_id
         return Hierarchy(parents, role_epoch=role_epoch)
 
+    def after_failure(
+        self, failed_id: str, successor_id: str, *, role_epoch: int
+    ) -> Hierarchy:
+        """The chain once ``successor_id`` takes over from a failed commander.
+
+        The successor moves into the failed agent's place and keeps its own
+        followers. The failed agent's other followers become the successor's.
+        The failed agent stays in the chain as the successor's follower, so if
+        it comes back it rejoins as a follower. The takeover needs a newer
+        epoch.
+        """
+        self._known(failed_id)
+        if successor_id not in self.subtree(failed_id)[1:]:
+            raise HierarchyError(
+                [f"{successor_id!r} is not below {failed_id!r}, so it can't succeed it"]
+            )
+        if _is_epoch(role_epoch) and role_epoch <= self.role_epoch:
+            raise HierarchyError(
+                [f"new role_epoch {role_epoch} must be greater than {self.role_epoch}"]
+            )
+        parents = dict(self._parents)
+        parents[successor_id] = self._parents[failed_id]
+        for follower in self._children[failed_id]:
+            if follower != successor_id:
+                parents[follower] = successor_id
+        parents[failed_id] = successor_id
+        return Hierarchy(parents, role_epoch=role_epoch)
+
     def with_agent(self, agent_id: str, parent_id: str) -> Hierarchy:
         """Add a new agent as a follower of ``parent_id``."""
         if agent_id in self._parents:

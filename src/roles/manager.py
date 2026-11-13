@@ -44,6 +44,7 @@ from enum import Enum
 from typing import Callable, Mapping
 
 from src.agents.hierarchy import Hierarchy
+from src.roles.failover import choose_successor
 from src.transport import Message
 
 SCHEMA_VERSION = 1
@@ -147,6 +148,12 @@ class RoleManager:
         self.records: deque[dict] = deque(maxlen=KEEP)
         self.ignored: deque[tuple[Message, str]] = deque(maxlen=KEEP)
         self.last_deny: str | None = None
+        # Failover in progress: the lost commander, who is expected to take
+        # over, and the candidates already ruled out.
+        self._lost: str | None = None
+        self._expected: str | None = None
+        self._excluded: set[str] = set()
+        self.vacant = False
 
     # --- what the agent knows ------------------------------------------------
 
@@ -165,8 +172,8 @@ class RoleManager:
         return Role.FOLLOWER
 
     def get_current_commander(self) -> str | None:
-        """This agent's commander; None when it is the top, or not yet known."""
-        if self._awaiting_commander:
+        """This agent's commander; None at the top, if unknown, or if vacant."""
+        if self._awaiting_commander or self.vacant:
             return None
         return self.hierarchy.parent_of(self.agent_id)
 
@@ -182,8 +189,106 @@ class RoleManager:
         return peers
 
     def observe_status(self, agent_id: str, status: Mapping[str, object]) -> None:
-        """Remember a peer's latest status, used to check its eligibility."""
+        """Remember an agent's latest shared status, used to check eligibility.
+
+        Feed every status from the commander's heartbeat, this agent's own
+        included, so that every survivor decides failover on the same data.
+        """
         self.peer_status[agent_id] = dict(status)
+
+    # --- failover ------------------------------------------------------------
+
+    @property
+    def expected_successor(self) -> str | None:
+        """Who this agent expects to take over, while a failover is running."""
+        return self._expected
+
+    def on_commander_lost(self, failed_id: str | None = None) -> list[Message]:
+        """The commander is confirmed gone; apply the failover rule.
+
+        Every survivor calls this (failure detection is the runtime's job).
+        If this agent is the designated successor it re-checks itself live:
+        if fit, it promotes itself and returns announcements for its new
+        followers; if not, it declines and the next candidate is expected.
+        """
+        failed = failed_id or self.get_current_commander()
+        if failed is None or failed not in self.hierarchy:
+            raise RoleError(f"{self.agent_id} has no commander to lose")
+        if self.agent_id not in self.hierarchy.subtree(failed)[1:]:
+            raise RoleError(f"{self.agent_id} is not below {failed!r}")
+        self._lost = failed
+        self._excluded = set()
+        self.vacant = False
+        return self._next_candidate()
+
+    def candidate_timed_out(self) -> list[Message]:
+        """The expected successor never announced itself; move to the next one."""
+        if self._lost is None or self._expected is None:
+            return []
+        self._excluded.add(self._expected)
+        return self._next_candidate()
+
+    def _next_candidate(self) -> list[Message]:
+        self._expected = choose_successor(
+            self.hierarchy,
+            self._lost,
+            statuses=self.peer_status,
+            eligibility=self._eligibility,
+            excluded=self._excluded,
+        )
+        if self._expected is None:
+            self.vacant = True
+            self._record_change(
+                self.agent_id, "vacant", self.role_epoch, None, None, self._lost
+            )
+            return []
+        if self._expected == self.agent_id:
+            return self._try_promote()
+        return []
+
+    def _try_promote(self) -> list[Message]:
+        failed = self._lost
+        unfit = self._eligibility(self._status())  # live re-check
+        if unfit is not None:
+            self._record_change(
+                self.agent_id,
+                "promotion_declined",
+                self.role_epoch,
+                None,
+                unfit,
+                failed,
+            )
+            self._excluded.add(self.agent_id)
+            return self._next_candidate()
+
+        old_epoch = self.role_epoch
+        self.hierarchy = self.hierarchy.after_failure(
+            failed, self.agent_id, role_epoch=old_epoch + 1
+        )
+        self._end_failover()
+        self._record_change(
+            self.agent_id,
+            "self_promoted",
+            old_epoch,
+            self.role_epoch,
+            None,
+            failed,
+            target=self.agent_id,
+            new_role=Role.COMMANDER,
+        )
+        return [
+            self._envelope(
+                follower, "heartbeat", Role.COMMANDER, {"status_summary": []}
+            )
+            for follower in self.followers()
+            if follower != failed
+        ]
+
+    def _end_failover(self) -> None:
+        self._lost = None
+        self._expected = None
+        self._excluded = set()
+        self.vacant = False
 
     # --- asking for the role -------------------------------------------------
 
@@ -253,6 +358,8 @@ class RoleManager:
             self._stale(message)
             return False
         if epoch > self.role_epoch:
+            if not self._accept_newer_authority(message, epoch):
+                return False
             self._adopt_newer_epoch(message, epoch)
         elif self._awaiting_commander and self._is_commanding_me(message):
             self.hierarchy = self._with_top(message["sender_id"], epoch)
@@ -399,6 +506,53 @@ class RoleManager:
                 },
             }
         )
+
+    def _accept_newer_authority(self, message: Message, epoch: int) -> bool:
+        """Decide whether a newer-epoch order from a commander is legitimate.
+
+        From this agent's own commander: yes. From the agent the failover
+        rule designates to replace that commander: yes, and the chain is
+        updated. From anyone else: an out-of-turn claim, refused and recorded.
+        A former top always accepts (it steps down instead).
+        """
+        if self.role is Role.COMMANDER or not self._is_commanding_me(message):
+            return True
+        sender = message["sender_id"]
+        parent = self.hierarchy.parent_of(self.agent_id)
+        if sender == parent and (self._lost is None or sender != self._expected):
+            return True
+        failed = self._lost or parent
+        if self._lost is not None:
+            designated = self._expected
+        elif failed is not None:
+            designated = choose_successor(
+                self.hierarchy,
+                failed,
+                statuses=self.peer_status,
+                eligibility=self._eligibility,
+            )
+        else:
+            designated = None
+        if failed is not None and sender == designated:
+            self.hierarchy = self.hierarchy.after_failure(
+                failed, sender, role_epoch=epoch
+            )
+            self._end_failover()
+            return True
+        self._record(
+            {
+                "record_type": "event",
+                "severity": "warning",
+                "event_type": "UNAUTHORIZED_PROMOTION",
+                "detail": {
+                    "message_id": message.get("message_id"),
+                    "sender_id": sender,
+                    "epoch": epoch,
+                    "expected": designated,
+                },
+            }
+        )
+        return False
 
     def _adopt_newer_epoch(self, message: Message, epoch: int) -> None:
         """Authority moved on. Only a former top restructures its view here.
