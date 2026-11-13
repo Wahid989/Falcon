@@ -101,6 +101,16 @@ class PeerLink(Transport):
         """Called by the router."""
         self._inbox.put(message)
 
+    def reopen(self, link: Transport) -> None:
+        """Carry on over a fresh real link (after the old one died)."""
+        self._link = link
+        self._inbox = queue.Queue()
+        self._closed.clear()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed.is_set()
+
 
 def exchange_logger_for(
     hierarchy: Hierarchy, agent_id: str, directory: str | Path, *, session_id: str
@@ -217,7 +227,8 @@ class DualRoleAgent:
             )
 
         self._stop = threading.Event()
-        self._readers: list[threading.Thread] = []
+        self._readers: dict[str, threading.Thread] = {}
+        self._started = False
         self._sync_epoch()
 
     # --- routing -------------------------------------------------------------
@@ -281,19 +292,36 @@ class DualRoleAgent:
 
     def start(self) -> None:
         """Start one reader per real link."""
-        if self._readers:
+        if self._started:
             return
+        self._started = True
         for peer, link in self._links.items():
-            reader = threading.Thread(
-                target=self._read, args=(peer, link), daemon=True, name=f"{peer}"
-            )
-            reader.start()
-            self._readers.append(reader)
+            self._start_reader(peer, link)
+
+    def replace_link(self, peer_id: str, link: Transport) -> None:
+        """Swap in a fresh link to one peer, for example after it crashed.
+
+        Only that peer's side is touched: the module using it carries on over
+        the new link, and every other link keeps running.
+        """
+        if peer_id not in self._links:
+            raise DualRoleError(f"{self.agent_id} has no link to {peer_id!r}")
+        self._links[peer_id] = link
+        self._views[peer_id].reopen(link)
+        old = self._readers.pop(peer_id, None)
+        if old is not None:
+            old.join(POLL_SECONDS * 4)
+        if self._started and not self._stop.is_set():
+            self._start_reader(peer_id, link)
+
+    def link_is_down(self, peer_id: str) -> bool:
+        """True once the link to ``peer_id`` has closed."""
+        return self._views[peer_id].closed
 
     def stop(self, timeout: float = 2.0) -> None:
         """Stop routing and close the module views. The real links stay open."""
         self._stop.set()
-        for reader in self._readers:
+        for reader in self._readers.values():
             reader.join(timeout)
         self._readers.clear()
         for view in self._views.values():
@@ -344,14 +372,23 @@ class DualRoleAgent:
             except TransportError:
                 self.undeliverable.append(message)
 
+    def _start_reader(self, peer: str, link: Transport) -> None:
+        reader = threading.Thread(
+            target=self._read, args=(peer, link), daemon=True, name=peer
+        )
+        self._readers[peer] = reader
+        reader.start()
+
     def _read(self, peer: str, link: Transport) -> None:
-        while not self._stop.is_set():
+        # Stops when the agent stops, or when this link has been replaced.
+        while not self._stop.is_set() and self._links.get(peer) is link:
             try:
                 message = link.receive(timeout=POLL_SECONDS)
             except TransportTimeoutError:
                 continue
             except TransportClosedError:
-                self._views[peer].close()
+                if self._links.get(peer) is link:
+                    self._views[peer].close()
                 return
             except TransportError:
                 # A garbled frame: the transport has already dropped it.
