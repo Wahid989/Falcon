@@ -7,8 +7,9 @@ refusal of a *valid* message; an `ERROR` means the message itself was
 unacceptable.
 
 Errors are returned as a `response`-type message with `response: "ERROR"` and
-an `error` object `{ code, message?, field? }`. Error codes are a fixed
-enumeration in the schema.
+an `error` object `{ code, message?, field?, agent? }`. Error codes are a fixed
+enumeration in the schema. `error.agent` optionally names the agent an error is
+about (for example, the unresponsive follower in a `NO_RESPONSE`).
 
 | Case | `error.code` | Behavior |
 | --- | --- | --- |
@@ -20,6 +21,7 @@ enumeration in the schema.
 | Stale role epoch | `STALE_EPOCH` | Reject a message whose `role_epoch` is older than current. (Mirrors the `STALE_EPOCH` decline reason for commands; both are logged.) |
 | Unauthorized request | `UNAUTHORIZED` | Reject; e.g. an agent attempting to self-promote out of turn, or a non-authorized role request. |
 | Duplicate message ID | `DUPLICATE_MESSAGE` | Return the **cached** response for that `message_id`; do **not** re-execute (FALCON-072). |
+| Follower did not answer | `NO_RESPONSE` | A commander waited the full response timeout for a follower and received nothing. The commander emits an `ERROR` with `error.agent` set to the silent follower's id, so the exchange is recorded and (for a middle agent) reported upward instead of being silently dropped. The follower's state is unknown, not changed. |
 
 ## Principles
 
@@ -35,6 +37,11 @@ enumeration in the schema.
 - **Stale authority is powerless.** A message carrying an old `role_epoch` is
   rejected whether it is a command (decline `STALE_EPOCH`) or any other type
   (error `STALE_EPOCH`), and the revived/old commander steps down.
+- **Silence is an event, not a gap.** Most error codes reject a *received*
+  message; `NO_RESPONSE` is the exception — a commander *originates* it when a
+  follower never answers, so a silent follower produces a recorded, reportable
+  result rather than nothing. Adding `NO_RESPONSE` is a backward-compatible
+  (MINOR) vocabulary addition under [versioning.md](versioning.md).
 
 ## Error vs decline — quick guide
 
