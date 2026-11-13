@@ -1,0 +1,107 @@
+# Deterministic failover: what happens when a commander disappears
+
+This is the sponsor-approved recovery rule (FALCON-060) and how it is
+implemented (063, 064, and the authority checks in 073 and 075). There is no
+voting. Every surviving agent applies the same rule to the same information,
+so they all name the same new commander.
+
+## 1. Detection (FALCON-061 and 062, transport side)
+
+- A commander sends a heartbeat ("I am alive", plus status) to its direct
+  followers only when the link has been idle for **5 s**. Any real message
+  counts as alive.
+- **3 missed intervals (15 s)** confirm that the commander is gone. Both
+  values are configurable, and a single missed beat never triggers failover.
+- The downward heartbeat carries **every** follower's status, so all siblings
+  share one view of who is fit.
+- On a confirmed loss, followers hold position, and the runtime calls
+  `RoleManager.on_commander_lost()` on each survivor.
+
+## 2. Selection
+
+1. The candidates are the lost commander's **direct followers, sorted by
+   agent id**.
+2. The **first candidate that passes the eligibility self-check** is the
+   successor. The check covers battery, fault, busy, terrain and equipment.
+   A candidate whose status isn't known gets the benefit of the doubt, because
+   its own live re-check (below) is the real gate.
+3. If no direct follower fits, the search goes **one level deeper**: their
+   followers, sorted by id.
+4. If nobody fits, the role is **vacant until a human intervenes**. Nothing
+   crashes; every survivor records `vacant`, and none has a commander.
+
+Every survivor computes the successor from the statuses it last heard (feed
+them with `observe_status`, the agent's own included). The same input means
+the same answer.
+
+## 3. Takeover
+
+- **Self-promotion, with no grant.** The designated agent runs a **live
+  re-check** on its real current state.
+  - **If it passes:** the epoch goes up by one. The agent takes the lost
+    commander's place: it **keeps its own followers**, gains the lost
+    commander's other followers, and the lost commander stays in the chain as
+    its follower. It then **announces** itself with a heartbeat at the new
+    epoch to each of its followers.
+  - **If it fails** (its condition changed since the last heartbeat): it
+    records `promotion_declined` with the reason and doesn't promote.
+- **Cascade.** A survivor that hears no announcement from the expected
+  successor in time calls `candidate_timed_out()` and expects the next
+  candidate. The timing belongs to the runtime.
+- **Accepting.** A survivor accepts a newer-epoch heartbeat or command only
+  from its own commander, or from the agent the rule designates, and then
+  updates its view of the chain the same way the successor did. Anything else
+  is an **out-of-turn claim**: it is refused, and an `UNAUTHORIZED_PROMOTION`
+  event is recorded. A survivor that missed the loss still accepts the
+  designated successor, because it can work out the same answer.
+
+## 4. Invalidation (FALCON-064)
+
+- The new epoch makes the old commander's authority stale. Its orders, even
+  delayed ones that were already in flight, are rejected as `STALE_EPOCH`
+  (and the Follower module answers `ERROR` / `STALE_EPOCH`). This is recorded
+  as a `STALE_EPOCH_REJECTED` event.
+- **A revived commander** that hears the new commander steps down
+  (`stepped_down`) and rejoins as a follower. It **never takes the role back
+  on its own**; the only way back is a later role request.
+
+## Records
+
+Every outcome is written in the exchange-log format the storage service
+ingests, as `role_change` records:
+- `self_promoted`;
+- `promotion_declined` (with a reason);
+- `vacant`;
+- `stepped_down`.
+
+Stale and out-of-turn rejections are `event` records.
+
+## Code
+
+| Piece | Where |
+| --- | --- |
+| Candidates and the chosen successor | `succession_candidates`, `choose_successor` in `src/roles/failover.py` |
+| The chain after a takeover | `Hierarchy.after_failure` in `src/agents/hierarchy.py` |
+| Loss, live re-check, promotion, cascade, vacancy, accepting or refusing | `on_commander_lost`, `candidate_timed_out`, `observe` on `RoleManager` (`src/roles/manager.py`) |
+
+Tests: `tests/unit/test_failover.py` (18). They cover:
+- the candidate order;
+- every selection case;
+- the takeover structure, including the deeper case;
+- promotion and acceptance by every survivor;
+- a declined live re-check with the cascade to the next candidate;
+- the deeper search;
+- all-unfit vacancy;
+- a survivor that missed the loss;
+- a revived commander, with its delayed old order refused;
+- out-of-turn claims, during a failover and without one.
+
+## Not done here
+
+- **The heartbeat and the 15 s detection** are Munem's FALCON-061 and 062.
+  They call `on_commander_lost` and feed `observe_status`.
+- **The eligibility self-check itself** is Maliha's FALCON-036. Until then,
+  `basic_eligibility()` stands in.
+- **Reconnecting links.** The successor must be able to reach the lost
+  commander's other followers. That is runtime work, together with FALCON-079
+  and 080.

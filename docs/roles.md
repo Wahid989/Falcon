@@ -78,6 +78,13 @@ roles.handle(replies[0])                # drone-a is now the top at epoch + 1
   - It never takes the role back on its own. The only way back is a new
     request.
 
+## Failover
+
+When a commander is lost, the same manager runs the deterministic failover
+rule: `on_commander_lost()`, `candidate_timed_out()`, the live re-check and
+self-promotion, vacancy, and refusing out-of-turn claims. See
+[failover.md](failover.md).
+
 ## Records
 
 Every grant, deny and step-down is recorded as a `role_change` record, and
