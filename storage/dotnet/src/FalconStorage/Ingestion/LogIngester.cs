@@ -54,15 +54,22 @@ internal sealed class LogIngester
                 return result;
             }
 
-            // Oldest first, so rotated copies are finished before the live file.
+            // Subfolders are included: a runtime may write each session to its own
+            // folder (for example logs/mvp/<session>/). Oldest first, so rotated
+            // copies are finished before the live file.
             var files = new DirectoryInfo(directory)
-                .EnumerateFiles(_options.LogFilePattern)
+                .EnumerateFiles(_options.LogFilePattern, new EnumerationOptions
+                {
+                    RecurseSubdirectories = true,
+                    IgnoreInaccessible = true,
+                })
                 .OrderBy(file => file.LastWriteTimeUtc)
-                .ThenBy(file => file.Name, StringComparer.Ordinal)
+                .ThenBy(file => file.FullName, StringComparer.Ordinal)
                 .ToList();
 
             foreach (var file in files)
             {
+                var name = Path.GetRelativePath(directory, file.FullName);
                 try
                 {
                     await IngestFileAsync(file.FullName, result, cancellationToken);
@@ -70,14 +77,14 @@ internal sealed class LogIngester
                 catch (FileNotFoundException)
                 {
                     // Rotation deleted the oldest file between listing and opening it.
-                    _logger.LogDebug("Log file {File} disappeared before it was read", file.Name);
+                    _logger.LogDebug("Log file {File} disappeared before it was read", name);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     // One file failing (for example the database dropping mid-batch)
                     // must not stop the other files; this one is retried next pass.
-                    _logger.LogError(ex, "Ingesting {File} failed; it will be retried", file.Name);
-                    result.FailedFiles.Add(new FailedFile(file.Name, ex.Message));
+                    _logger.LogError(ex, "Ingesting {File} failed; it will be retried", name);
+                    result.FailedFiles.Add(new FailedFile(name, ex.Message));
                 }
             }
 
