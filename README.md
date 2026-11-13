@@ -95,6 +95,7 @@ and documented here:
 - [`docs/transport.md`](docs/transport.md) — transport API, in-memory pairs, TCP demo, recovery, and agent handoff
 - [`docs/commander.md`](docs/commander.md) — Commander module: building, sending and correlating commands
 - [`docs/hierarchy-runtime.md`](docs/hierarchy-runtime.md) — command chain model and dual-role (middle) agents
+- [`docs/roles.md`](docs/roles.md) — Role Manager: role requests, grants, epochs and stale authority
 - [`docs/protocol.md`](docs/protocol.md) — message envelope
 - [`docs/vocabulary.md`](docs/vocabulary.md) — commands, responses, decline reasons, role/heartbeat messages
 - [`docs/state.md`](docs/state.md) — simulated follower state
