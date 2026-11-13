@@ -24,7 +24,8 @@ unaffected, and the backlog is loaded when storage comes back.
 1. An agent sends or receives a message and appends one JSON line to its log,
    with `direction` and the log-only `hierarchy_level`.
 2. The ingester reads new, complete lines from every `*.jsonl*` file in the log
-   directory.
+   directory **and its subfolders**, so per-session folders such as
+   `logs/mvp/<session>/` are picked up automatically.
 3. Each line is validated. A valid record goes to its table. An invalid line
    goes to `IngestionRejects` with the reason.
 4. The rows and the file's new read position commit in one transaction.
@@ -33,9 +34,17 @@ unaffected, and the backlog is loaded when storage comes back.
 ## Running
 
 ```bash
-docker compose up -d --build sql-server storage-api
+docker compose --profile storage up -d --build sql-server storage-api
 curl http://localhost:8080/health          # Healthy
 ```
+
+The storage services run under the Compose `storage` profile.
+
+> **Known issue:** the shared `falcon` network is `internal: true`, which keeps
+> the agents offline but also stops Docker publishing ports 8080 and 1433, so
+> the API and Swagger can't be reached from the host. Until the storage
+> services get a non-internal network of their own, reach the API from a
+> container on `falcon_falcon` (as in the verification command below).
 
 Interactive API docs: <http://localhost:8080/swagger>.
 
@@ -45,7 +54,7 @@ reads `./logs` (mounted read-only at `/logs`) every 10 seconds.
 | Setting (environment) | Default | Meaning |
 | --- | --- | --- |
 | `ConnectionStrings__FalconDb` | see `docker-compose.yml` | SQL Server connection; its `Database=` is created if missing. |
-| `Storage__LogDirectory` | `/logs` | Directory of JSONL logs. |
+| `Storage__LogDirectory` | `/logs` | Directory of JSONL logs, searched recursively. |
 | `Storage__LogFilePattern` | `*.jsonl*` | Log files, including rotated copies. |
 | `Storage__IngestIntervalSeconds` | `10` | Background interval; `0` disables it. |
 | `Storage__BatchSize` | `500` | Lines per transaction. |
@@ -118,6 +127,25 @@ writer (FALCON-039–041) and the envelope (FALCON-014). The parser is
 | A line is bad | It is stored in `IngestionRejects` with the reason. The lines after it still load. |
 | Two identical lines appear (for example a re-sent message) | They stay two rows. |
 
+## Checking that every exchange reached the database
+
+`scripts/verify_storage.py` compares a run's logs with the database. It:
+- reads every message record under a folder;
+- asks the service to ingest;
+- checks that each record is stored with the same message, agent, direction
+  and `hierarchy_level`.
+
+It prints a report and exits `0` when nothing is missing or extra.
+
+```bash
+# After a run (e.g. python -m scripts.run_mvp), with the storage profile up.
+# The Compose network is internal, so run it on that network:
+MSYS_NO_PATHCONV=1 docker run --rm --network falcon_falcon -v "$PWD:/repo:ro" -w /repo   falcon-agent python -m scripts.verify_storage   --logs logs/mvp/<session> --api http://storage-api:8080
+```
+
+`--no-ingest` skips the ingest request, to check that the background pass
+picked the run up on its own.
+
 ## Tests
 
 ```bash
@@ -133,6 +161,17 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD/storage:/work" -w /work/dotnet \
 
 With the .NET 8 SDK installed, run `dotnet test storage/dotnet` with
 `FALCON_TEST_DB` pointing at `localhost,1433`.
+
+`AgentLogIngestionTests` ingest logs written by the real Python Commander and
+Follower (`tests/FalconStorage.Tests/Fixtures/agent-logs`, in a nested
+folder). They check that:
+- every exchange is stored once as SENT and once as RECEIVED;
+- `hierarchy_level` is correct on each row;
+- re-ingesting adds nothing.
+
+`tests/integration/test_exchange_log_content.py` checks that the fixture still
+matches what the log writer produces. If the format changes, regenerate it with
+`run_exchange()` from that test.
 
 The database tests are skipped when `FALCON_TEST_DB` is not set. Set
 `FALCON_REQUIRE_DB=1` to make a missing database fail the run instead (for
