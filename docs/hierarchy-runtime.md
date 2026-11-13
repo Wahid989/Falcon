@@ -126,8 +126,65 @@ chain. A middle agent at level 1 therefore logs:
 - what it receives from its commander at level 0;
 - what it receives from its followers at level 2.
 
+## Relaying commands down the chain
+
+In the sponsor's case, Ground talks only to the Drone Commander, never to the
+drones. Give a middle agent a `relay_timeout` and it passes the commands it
+accepts down to its followers:
+
+```python
+middle = DualRoleAgent("drone-cmd", chain, parent_link=..., follower_links=...,
+                       relay_timeout=1.0)
+with middle:
+    middle.serve_once(timeout=5)   # one command from Ground, relayed and answered
+```
+
+When a command arrives from above, the middle agent:
+1. makes its own decision. If it declines, it answers `DECLINE` with its own
+   reason, and nothing is relayed.
+2. sends the same command, with the same waypoint, to each of its followers,
+   and waits up to `relay_timeout` for all of them;
+3. answers its commander with a summary:
+
+| Followers' answers | Answer upward |
+| --- | --- |
+| All `COMPLY` | `COMPLY` |
+| At least one `DECLINE` | `DECLINE` with the first decliner's reason (in follower-id order) |
+| A follower timed out, sent an invalid or `ERROR` reply, or its link failed | **No answer**, so the commander's timeout reports `TIMEOUT` |
+
+**Notes:**
+- The protocol has no error code yet for "a follower didn't answer". Until it
+  does, silence is passed up as silence, which is truthful and uses only valid
+  messages. The rule lives in `summarize()` in `src/agents/relay.py`.
+- Followers that complied stay complied, even when the summary is `DECLINE`.
+  The vocabulary has no undo.
+- `REPORT_STATUS` is never relayed. The middle agent answers with its own
+  status.
+- A relay that ended without a summary is kept in `middle.incomplete`, and
+  `on_relay` is called with every relay's per-follower results.
+- **Timeouts must shrink going down.** Each agent's relay timeout must be
+  shorter than its commander's response timeout. Otherwise the commander gives
+  up before the summary arrives.
+- **Threading:** the relay uses the middle agent's Commander module from the
+  thread that calls `serve_once`, so don't drive `middle.commander` directly
+  at the same time.
+
+This works at any depth: each middle agent relays to the level below it.
+
 ## Tests
 
+- `tests/unit/test_relay.py` covers the summary rule.
+- `tests/integration/test_ground_drone_scenario.py` runs the sponsor's chain
+  from `config/hierarchy/ground-drone.yml`, over in-memory links and real TCP.
+  It covers:
+  - HOLD down and COMPLY up;
+  - a drone's battery decline reaching Ground;
+  - the Drone Commander declining itself;
+  - waypoints;
+  - status;
+  - a silent drone;
+  - every agent's log levels;
+  - chains of depth 3 to 5.
 - `tests/unit/test_hierarchy.py` covers:
   - mission config;
   - parents and children;
