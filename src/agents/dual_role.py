@@ -30,7 +30,8 @@ from typing import Callable, Mapping
 from src.agents.commander import Commander, Validator, default_validator
 from src.agents.follower import Follower
 from src.agents.hierarchy import Hierarchy
-from src.decision import DecisionEngine
+from src.agents.relay import Relay, RelayIncomplete, RelayingDecision
+from src.decision import DecisionEngine, decide
 from src.logging.exchange import ExchangeLogger
 from src.state import FollowerState
 from src.transport import (
@@ -120,6 +121,11 @@ class DualRoleAgent:
     ``follower`` is ``None`` for the top, and ``commander`` has no followers
     for a leaf. Use ``commander`` from one thread and drive ``follower`` (its
     ``handle_once``) from one thread, as each module expects.
+
+    With ``relay_timeout`` set, a middle agent passes each command it accepts
+    down to its followers and answers upward with a summary (see
+    ``src/agents/relay.py``). The relay uses ``commander`` from the follower
+    thread, so don't also drive ``commander`` directly while serving.
     """
 
     def __init__(
@@ -134,6 +140,8 @@ class DualRoleAgent:
         validator: Validator | None = None,
         exchange_log: ExchangeLogger | None = None,
         on_reject: Callable[[Message, str], None] | None = None,
+        relay_timeout: float | None = None,
+        on_relay: Callable[[Relay], None] | None = None,
     ) -> None:
         follower_links = dict(follower_links or {})
         parent_id = hierarchy.parent_of(agent_id)
@@ -154,6 +162,8 @@ class DualRoleAgent:
         self._validate = validator if validator is not None else default_validator()
         self._on_reject = on_reject
         self.rejected: deque[tuple[Message, str]] = deque(maxlen=KEEP_REJECTED)
+        self.incomplete: deque[RelayIncomplete] = deque(maxlen=KEEP_REJECTED)
+        self.relaying: RelayingDecision | None = None
 
         self._links: dict[str, Transport] = dict(follower_links)
         self._views: dict[str, PeerLink] = {
@@ -179,10 +189,19 @@ class DualRoleAgent:
             state.follower_ids = list(followers)
             state.hierarchy_level = hierarchy.level_of(agent_id)
             state.role_epoch = max(state.role_epoch, hierarchy.role_epoch)
+            engine = decision_engine if decision_engine is not None else decide
+            if relay_timeout is not None and followers:
+                self.relaying = RelayingDecision(
+                    self.commander,
+                    timeout=relay_timeout,
+                    own_decision=engine,
+                    on_relay=on_relay,
+                )
+                engine = self.relaying
             self.follower = Follower(
                 agent_id,
                 self._views[parent_id],
-                decision_engine=decision_engine,
+                decision_engine=engine,
                 state=state,
                 validator=self._validate,
                 exchange_log=exchange_log,
@@ -243,6 +262,22 @@ class DualRoleAgent:
 
     def __exit__(self, *exc) -> None:
         self.stop()
+
+    def serve_once(self, timeout: float):
+        """Handle one message from the commander above; see ``Follower.handle_once``.
+
+        With a relay timeout set, a command this agent complies with is first
+        passed to its followers. If one of them doesn't answer properly, no
+        answer goes upward: the relay is kept in ``incomplete`` and None is
+        returned.
+        """
+        if self.follower is None:
+            raise DualRoleError(f"{self.agent_id} is the top; it has no commander")
+        try:
+            return self.follower.handle_once(timeout)
+        except RelayIncomplete as incomplete:
+            self.incomplete.append(incomplete)
+            return None
 
     # --- internals -----------------------------------------------------------
 
