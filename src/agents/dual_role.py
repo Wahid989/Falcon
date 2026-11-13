@@ -25,7 +25,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from src.agents.commander import Commander, Validator, default_validator
 from src.agents.follower import Follower
@@ -34,6 +34,10 @@ from src.agents.relay import Relay, RelayIncomplete, RelayingDecision
 from src.decision import DecisionEngine, decide
 from src.logging.exchange import ExchangeLogger
 from src.state import FollowerState
+
+if TYPE_CHECKING:
+    from src.roles.manager import RoleManager
+
 from src.transport import (
     Message,
     Transport,
@@ -47,6 +51,7 @@ SCHEMA_VERSION = 1
 KEEP_REJECTED = 256
 # How often each link reader wakes up to notice a stop request.
 POLL_SECONDS = 0.05
+ROLE_TYPES = frozenset({"role_request", "role_grant", "role_deny"})
 
 
 class DualRoleError(Exception):
@@ -142,6 +147,7 @@ class DualRoleAgent:
         on_reject: Callable[[Message, str], None] | None = None,
         relay_timeout: float | None = None,
         on_relay: Callable[[Relay], None] | None = None,
+        roles: RoleManager | None = None,
     ) -> None:
         follower_links = dict(follower_links or {})
         parent_id = hierarchy.parent_of(agent_id)
@@ -163,6 +169,9 @@ class DualRoleAgent:
         self._on_reject = on_reject
         self.rejected: deque[tuple[Message, str]] = deque(maxlen=KEEP_REJECTED)
         self.incomplete: deque[RelayIncomplete] = deque(maxlen=KEEP_REJECTED)
+        self.undeliverable: deque[Message] = deque(maxlen=KEEP_REJECTED)
+        self.roles = roles
+        self._roles_lock = threading.Lock()
         self.relaying: RelayingDecision | None = None
 
         self._links: dict[str, Transport] = dict(follower_links)
@@ -209,6 +218,7 @@ class DualRoleAgent:
 
         self._stop = threading.Event()
         self._readers: list[threading.Thread] = []
+        self._sync_epoch()
 
     # --- routing -------------------------------------------------------------
 
@@ -228,13 +238,46 @@ class DualRoleAgent:
         return None
 
     def dispatch(self, message: Message, arrived_from: str) -> str | None:
-        """Route one received message to its module, or reject it."""
+        """Route one received message to its module, or reject it.
+
+        With a Role Manager, role messages go to it (``"roles"``), and every
+        other message's epoch is shown to it first, so a newer epoch reaches
+        both modules before they handle the message.
+        """
         target = self.route(message, arrived_from)
         if target is None:
             self._reject(message, arrived_from)
-        else:
-            self._views[arrived_from].deliver(message)
+            return None
+        if self.roles is not None:
+            with self._roles_lock:
+                if message.get("type") in ROLE_TYPES:
+                    replies = self.roles.handle(message)
+                    self._sync_epoch()
+                    self._send_all(replies)
+                    return "roles"
+                self.roles.observe(message)
+                self._sync_epoch()
+        self._views[arrived_from].deliver(message)
         return target
+
+    def request_role(self, target_id: str | None = None) -> Message:
+        """Ask a commander above for the role, over the link to it.
+
+        The target must be a direct peer (this agent's commander): a
+        skip-level request needs a link to the top, which the runtime would
+        have to open.
+        """
+        if self.roles is None:
+            raise DualRoleError(f"{self.agent_id} has no Role Manager")
+        with self._roles_lock:
+            request = self.roles.request_role(target_id)
+            if request["recipient_id"] not in self._links:
+                self.roles.cancel_request()
+                raise DualRoleError(
+                    f"{self.agent_id} has no link to {request['recipient_id']!r}"
+                )
+            self._links[request["recipient_id"]].send(request)
+        return request
 
     def start(self) -> None:
         """Start one reader per real link."""
@@ -280,6 +323,26 @@ class DualRoleAgent:
             return None
 
     # --- internals -----------------------------------------------------------
+
+    def _sync_epoch(self) -> None:
+        """Stamp the Role Manager's epoch on both modules."""
+        if self.roles is None:
+            return
+        epoch = self.roles.role_epoch
+        self.commander.role_epoch = epoch
+        if self.follower is not None and self.follower.state.role_epoch < epoch:
+            self.follower.state.role_epoch = epoch
+
+    def _send_all(self, messages: list[Message]) -> None:
+        for message in messages:
+            link = self._links.get(message["recipient_id"])
+            if link is None:
+                self.undeliverable.append(message)
+                continue
+            try:
+                link.send(message)
+            except TransportError:
+                self.undeliverable.append(message)
 
     def _read(self, peer: str, link: Transport) -> None:
         while not self._stop.is_set():
