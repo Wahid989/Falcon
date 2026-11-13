@@ -104,9 +104,9 @@ Co-owned with Himel and Maliha; my lane is the protocol/vocabulary side.
 
 | Ticket | Title | Status |
 | --- | --- | --- |
-| 044 | Role state machine | ⬜ Not started (Phase 6) |
-| 053 | Hierarchy data model | ⬜ Not started (Phase 7) |
-| 082 | Confirm group splitting out of scope | ⬜ Not started (Phase 11) |
+| 044 | Role state machine | 🟡 In review — `docs/role-state-machine.md` |
+| 053 | Hierarchy data model | 🟡 In review — `docs/hierarchy-model.md` |
+| 082 | Confirm group splitting out of scope | 🟡 In review — `docs/scope.md` |
 | 093 | Technical report — protocol specification section | ⬜ Not started (Phase 15) |
 
 My report section (093) must match `src/schema/falcon-v1.json` exactly and cover
@@ -127,6 +127,9 @@ Protocol Buffers, and log-only `hierarchy_level`.
 | `docs/acceptance-criteria.md` | Given/When/Then per command |
 | `docs/versioning.md` | Schema versioning strategy |
 | `docs/protocol-errors.md` | Protocol error behavior |
+| `docs/role-state-machine.md` | Role state machine (FALCON-044) |
+| `docs/hierarchy-model.md` | Hierarchy data model (FALCON-053) |
+| `docs/scope.md` | Scope boundaries / group splitting (FALCON-082) |
 | `docs/mvp-roundtrip.md` | FALCON-031 round-trip message contract |
 | `tests/unit/test_schema_examples.py` | Schema validity cases |
 | `tests/unit/test_validator.py` | Validator unit tests |
