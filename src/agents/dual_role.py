@@ -68,6 +68,7 @@ class PeerLink(Transport):
     def __init__(self, peer_id: str, link: Transport) -> None:
         self.peer_id = peer_id
         self._link = link
+        self.last_received: Message | None = None
         self._inbox: queue.Queue[Message | None] = queue.Queue()
         self._closed = threading.Event()
 
@@ -90,6 +91,7 @@ class PeerLink(Transport):
             raise TransportTimeoutError("No message from peer in time") from None
         if message is None:
             raise TransportClosedError("Peer link is closed")
+        self.last_received = message
         return message
 
     def close(self) -> None:
@@ -176,6 +178,7 @@ class DualRoleAgent:
         self.agent_id = agent_id
         self.hierarchy = hierarchy
         self._validate = validator if validator is not None else default_validator()
+        self._exchange_log = exchange_log
         self._on_reject = on_reject
         self.rejected: deque[tuple[Message, str]] = deque(maxlen=KEEP_REJECTED)
         self.incomplete: deque[RelayIncomplete] = deque(maxlen=KEEP_REJECTED)
@@ -338,8 +341,9 @@ class DualRoleAgent:
         """Handle one message from the commander above; see ``Follower.handle_once``.
 
         With a relay timeout set, a command this agent complies with is first
-        passed to its followers. If one of them doesn't answer properly, no
-        answer goes upward: the relay is kept in ``incomplete`` and None is
+        passed to its followers. If one of them doesn't answer properly, the
+        answer upward is ``ERROR`` / ``NO_RESPONSE`` naming that follower in
+        ``error.agent``; the relay is kept in ``incomplete`` and None is
         returned.
         """
         if self.follower is None:
@@ -348,9 +352,40 @@ class DualRoleAgent:
             return self.follower.handle_once(timeout)
         except RelayIncomplete as incomplete:
             self.incomplete.append(incomplete)
+            self._report_no_response(incomplete)
             return None
 
     # --- internals -----------------------------------------------------------
+
+    def _report_no_response(self, incomplete: RelayIncomplete) -> None:
+        parent = self.hierarchy.parent_of(self.agent_id)
+        request = self._views[parent].last_received
+        if request is None or not isinstance(request.get("message_id"), str):
+            return
+        error = {"code": "NO_RESPONSE", "message": str(incomplete)}
+        if incomplete.silent_agent is not None:
+            error["agent"] = incomplete.silent_agent
+        reply = {
+            "message_id": str(uuid.uuid4()),
+            "sender_id": self.agent_id,
+            "recipient_id": parent,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "schema_version": SCHEMA_VERSION,
+            "sender_role": "follower",
+            "role_epoch": self.follower.state.role_epoch,
+            "type": "response",
+            "payload": {
+                "response": "ERROR",
+                "in_reply_to": request["message_id"],
+                "error": error,
+            },
+        }
+        ok, problems = self._validate(reply)
+        if not ok:
+            raise DualRoleError("built an invalid NO_RESPONSE: " + "; ".join(problems))
+        self._views[parent].send(reply)
+        if self._exchange_log is not None:
+            self._exchange_log.record("sent", reply)
 
     def _sync_epoch(self) -> None:
         """Stamp the Role Manager's epoch on both modules."""

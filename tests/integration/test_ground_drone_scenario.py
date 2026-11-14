@@ -15,6 +15,7 @@ import pytest
 from src.agents import Outcome
 from src.agents.dual_role import DualRoleAgent, exchange_logger_for
 from src.agents.hierarchy import Hierarchy
+from src.schema.validator import validate
 from src.state import FollowerState
 from src.transport import (
     InMemoryTransport,
@@ -203,12 +204,18 @@ def test_status_is_answered_by_the_drone_commander_itself(sponsor):
         assert net.agents["drone-cmd"].relaying.last_relay is None
 
 
-def test_a_silent_drone_means_no_answer_upward(sponsor):
+def test_a_silent_drone_is_reported_as_no_response(sponsor, tmp_path):
     relay_timeouts = {"drone-cmd": 0.5}
-    with Network(sponsor, silent={"drone-c"}, relay_timeouts=relay_timeouts) as net:
+    with Network(
+        sponsor, silent={"drone-c"}, relay_timeouts=relay_timeouts, log_dir=tmp_path
+    ) as net:
         result = net.agents["ground"].commander.issue("drone-cmd", "HOLD", timeout=2)
 
-        assert result.outcome is Outcome.TIMEOUT
+        # Ground hears about it straight away, with the silent drone named.
+        assert result.outcome is Outcome.ERROR
+        assert result.error["code"] == "NO_RESPONSE"
+        assert result.error["agent"] == "drone-c"
+        assert validate(result.response) == (True, [])
         (incomplete,) = net.agents["drone-cmd"].incomplete
         assert incomplete.relay.unanswered() == {"drone-c": "TIMEOUT"}
         assert "drone-c (TIMEOUT)" in str(incomplete)
@@ -217,6 +224,32 @@ def test_a_silent_drone_means_no_answer_upward(sponsor):
         assert net.state("drone-b").movement_flag is False
         # The drone commander did not take the command itself.
         assert net.state("drone-cmd").movement_flag is True
+
+    # The NO_RESPONSE it sent upward is in its exchange log.
+    sent = [
+        json.loads(line)
+        for line in (tmp_path / "drone-cmd.jsonl").read_text().splitlines()
+    ]
+    errors = [
+        r["message"]["payload"]
+        for r in sent
+        if r["direction"] == "sent"
+        and r["message"]["payload"].get("response") == "ERROR"
+    ]
+    assert errors[0]["error"]["agent"] == "drone-c"
+
+
+def test_deep_silence_names_the_agent_that_went_silent():
+    ids = [f"agent-{n}" for n in range(4)]
+    chain = Hierarchy.chain(ids)
+    timeouts = {agent: 0.6 * (4 - level) for level, agent in enumerate(ids)}
+    with Network(chain, silent={ids[-1]}, relay_timeouts=timeouts) as net:
+        result = net.agents[ids[0]].commander.issue(ids[1], "HOLD", timeout=4)
+
+        assert result.outcome is Outcome.ERROR
+        assert result.error["code"] == "NO_RESPONSE"
+        # Two levels of middle agents pass up the real silent agent.
+        assert result.error["agent"] == ids[-1]
 
 
 def test_every_agent_logs_its_part_at_its_level(sponsor, tmp_path):

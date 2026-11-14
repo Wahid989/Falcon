@@ -70,3 +70,34 @@ def test_no_followers_means_own_decision_only():
     )
     assert decide(None, "HOLD", {}, 0) == DecisionResult(True)
     assert decide.last_relay is None
+
+
+def error_result(code, agent=None):
+    error = {"code": code}
+    if agent:
+        error["agent"] = agent
+    response = {"payload": {"response": "ERROR", "error": error}}
+    return CommandResult({"message_id": "m"}, Outcome.ERROR, response)
+
+
+def test_silent_agent_is_the_first_unanswered_follower():
+    r = relay(
+        a=result(Outcome.COMPLY),
+        c=result(Outcome.TIMEOUT),
+        b=TransportClosedError("gone"),
+    )
+    assert r.silent_agent() == "b"
+
+
+def test_silent_agent_passes_up_the_agent_a_middle_agent_named():
+    r = relay(a=error_result("NO_RESPONSE", "deep-drone"), b=result(Outcome.COMPLY))
+    assert r.silent_agent() == "deep-drone"
+
+
+def test_other_errors_name_the_follower_itself():
+    r = relay(a=error_result("STALE_EPOCH"))
+    assert r.silent_agent() == "a"
+
+
+def test_everyone_answered_means_no_silent_agent():
+    assert relay(a=result(Outcome.COMPLY)).silent_agent() is None
