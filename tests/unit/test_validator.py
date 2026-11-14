@@ -217,3 +217,20 @@ def test_empty_message_names_missing_fields():
         "payload",
     ]:
         assert required in joined
+
+
+def test_no_response_error_names_the_silent_follower():
+    # A commander reports a follower that never answered, naming it via error.agent.
+    message = envelope(
+        "response",
+        {
+            "response": "ERROR",
+            "in_reply_to": "cmd-1",
+            "error": {"code": "NO_RESPONSE", "agent": "follower-3"},
+        },
+        sender_id="drone-commander",
+        recipient_id="top-commander",
+    )
+    ok, errors = validate(message)
+    assert ok, errors
+    assert is_valid(message)

@@ -124,7 +124,8 @@
         "INVALID_SENDER_OR_RECIPIENT",
         "STALE_EPOCH",
         "UNAUTHORIZED",
-        "DUPLICATE_MESSAGE"
+        "DUPLICATE_MESSAGE",
+        "NO_RESPONSE"
       ]
     },
     "status_snapshot": {
@@ -153,7 +154,8 @@
       "properties": {
         "code": { "$ref": "#/$defs/error_code" },
         "message": { "type": "string" },
-        "field": { "type": "string" }
+        "field": { "type": "string" },
+        "agent": { "$ref": "#/$defs/agent_id" }
       }
     },
     "command_payload": {
