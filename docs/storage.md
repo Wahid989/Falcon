@@ -91,7 +91,8 @@ A `message` record example:
  "logged_at":"2026-10-13T12:00:01.005Z","direction":"sent","hierarchy_level":0,
  "message":{"message_id":"m-1","sender_id":"ground","recipient_id":"drone-cmd",
             "timestamp":"2026-10-13T12:00:01Z","schema_version":"1.0",
-            "sender_role":"COMMANDER","role_epoch":1,"type":"HOLD","payload":{}}}
+            "sender_role":"commander","role_epoch":1,"type":"command",
+            "payload":{"command":"HOLD"}}}
 ```
 
 What each record type needs:

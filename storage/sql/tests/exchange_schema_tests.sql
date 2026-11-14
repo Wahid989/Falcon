@@ -78,10 +78,10 @@ INSERT INTO dbo.Messages
      MessageType, SenderRole, RoleEpoch, SchemaVersion, HierarchyLevel, Payload, SourceHash)
 VALUES
     (N'test-session', N'm-1', SYSUTCDATETIME(), N'cmd-1', N'cmd-1', N'fol-1', 'SENT',
-     'HOLD', 'COMMANDER', 1, '1.0', 0, N'{}', HASHBYTES('SHA2_256', 'line-1')),
+     'HOLD', 'commander', 1, '1.0', 0, N'{}', HASHBYTES('SHA2_256', 'line-1')),
     -- Same message seen by the receiver: allowed, different source line.
     (N'test-session', N'm-1', SYSUTCDATETIME(), N'fol-1', N'cmd-1', N'fol-1', 'RECEIVED',
-     'HOLD', 'COMMANDER', 1, '1.0', 0, N'{}', HASHBYTES('SHA2_256', 'line-2')),
+     'HOLD', 'commander', 1, '1.0', 0, N'{}', HASHBYTES('SHA2_256', 'line-2')),
     -- Unknown sender: hierarchy level is null.
     (N'test-session', N'm-2', SYSUTCDATETIME(), N'fol-1', N'stranger', N'fol-1', 'RECEIVED',
      'HOLD', NULL, 1, '1.0', NULL, NULL, HASHBYTES('SHA2_256', 'line-3'));

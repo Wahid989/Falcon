@@ -18,7 +18,7 @@ public class LogRecordParserTests
         Assert.Equal("ground", message.SenderId);
         Assert.Equal("drone-cmd", message.ReceiverId);
         Assert.Equal("HOLD", message.MessageType);
-        Assert.Equal("COMMANDER", message.SenderRole);
+        Assert.Equal("commander", message.SenderRole);
         Assert.Equal(1, message.RoleEpoch);
         Assert.Equal("1.0", message.SchemaVersion);
         Assert.Equal(2, message.HierarchyLevel);
