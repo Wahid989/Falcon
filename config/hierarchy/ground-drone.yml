@@ -1,0 +1,14 @@
+# The sponsor's case: the ground commander talks only to the drone commander,
+# which commands the drones. Each agent names its commander ("parent"); the
+# top has none. Levels are computed from this (ground 0, drone-cmd 1, drones 2).
+role_epoch: 0
+agents:
+  - id: ground
+  - id: drone-cmd
+    parent: ground
+  - id: drone-a
+    parent: drone-cmd
+  - id: drone-b
+    parent: drone-cmd
+  - id: drone-c
+    parent: drone-cmd
