@@ -165,12 +165,14 @@ When a command arrives from above, the middle agent:
 | --- | --- |
 | All `COMPLY` | `COMPLY` |
 | At least one `DECLINE` | `DECLINE` with the first decliner's reason (in follower-id order) |
-| A follower timed out, sent an invalid or `ERROR` reply, or its link failed | **No answer**, so the commander's timeout reports `TIMEOUT` |
+| A follower timed out, sent an invalid or `ERROR` reply, or its link failed | `ERROR` with code `NO_RESPONSE`, and `error.agent` naming the silent follower |
 
 **Notes:**
-- The protocol has no error code yet for "a follower didn't answer". Until it
-  does, silence is passed up as silence, which is truthful and uses only valid
-  messages. The rule lives in `summarize()` in `src/agents/relay.py`.
+- `NO_RESPONSE` names the agent that actually went silent. If the
+  unanswered follower is itself a middle agent reporting `NO_RESPONSE`, the
+  agent it named is passed up, so the top learns which agent went quiet even
+  several levels down. The reply is written to the middle agent's exchange
+  log.
 - Followers that complied stay complied, even when the summary is `DECLINE`.
   The vocabulary has no undo.
 - `REPORT_STATUS` is never relayed. The middle agent answers with its own
@@ -197,7 +199,7 @@ This works at any depth: each middle agent relays to the level below it.
   - the Drone Commander declining itself;
   - waypoints;
   - status;
-  - a silent drone;
+  - a silent drone reported as `NO_RESPONSE`, including three levels down;
   - every agent's log levels;
   - chains of depth 3 to 5.
 - `tests/unit/test_hierarchy.py` covers:
