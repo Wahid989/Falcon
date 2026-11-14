@@ -8,9 +8,10 @@ its followers, waits for them, and answers its commander with a summary:
 - a follower declined: ``DECLINE`` with that follower's reason (the first,
   in follower-id order);
 - a follower didn't answer properly (timed out, sent an invalid or ``ERROR``
-  reply, or its link failed): no answer upward, so the commander's own
-  timeout reports it. The protocol has no error code for "a follower didn't
-  answer" yet; ``summarize`` is the one place to change once it does.
+  reply, or its link failed): ``ERROR`` with code ``NO_RESPONSE`` and
+  ``error.agent`` naming the silent follower. When that follower is itself a
+  middle agent reporting ``NO_RESPONSE``, the agent it named is passed up, so
+  the top learns which agent actually went silent.
 
 Followers that complied stay complied even when the summary is ``DECLINE``:
 the vocabulary has no undo. ``REPORT_STATUS`` is never relayed; the middle
@@ -32,10 +33,11 @@ RELAYED_COMMANDS = frozenset({"HOLD", "PROCEED_TO_WAYPOINT", "RETURN"})
 
 
 class RelayIncomplete(Exception):
-    """A follower didn't answer properly, so no answer goes upward."""
+    """A follower didn't answer properly; the answer upward is NO_RESPONSE."""
 
     def __init__(self, relay: Relay) -> None:
         self.relay = relay
+        self.silent_agent = relay.silent_agent()
         missing = ", ".join(
             f"{fid} ({outcome})" for fid, outcome in relay.unanswered().items()
         )
@@ -56,6 +58,22 @@ class Relay:
             return "LINK_FAILED"
         return result.outcome.value
 
+    def silent_agent(self) -> str | None:
+        """The agent to name in NO_RESPONSE: the first unanswered follower by id,
+        or the agent that follower itself reported as silent."""
+        for follower_id in sorted(self.unanswered()):
+            result = self.results[follower_id]
+            if (
+                isinstance(result, CommandResult)
+                and result.outcome is Outcome.ERROR
+                and isinstance(result.error, dict)
+                and result.error.get("code") == "NO_RESPONSE"
+                and isinstance(result.error.get("agent"), str)
+            ):
+                return result.error["agent"]
+            return follower_id
+        return None
+
     def unanswered(self) -> dict[str, str]:
         return {
             fid: self.outcome_of(fid)
@@ -65,7 +83,8 @@ class Relay:
 
 
 def summarize(relay: Relay) -> DecisionResult | None:
-    """The answer to send upward, or None when there is nothing truthful to send."""
+    """COMPLY or DECLINE for the commander, or None when a follower didn't
+    answer properly (the caller then reports NO_RESPONSE)."""
     if relay.unanswered():
         return None
     for follower_id in sorted(relay.results):
