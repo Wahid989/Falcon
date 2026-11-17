@@ -100,3 +100,9 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# ---------------------------------------------------------------------------
+# Live dashboard build outputs (scripts/build_dashboard.py)
+# ---------------------------------------------------------------------------
+site/
+test-results.xml
