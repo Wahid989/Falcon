@@ -47,7 +47,7 @@ See [role eligibility](roles.md) for commander-specific configuration.
 | Healthy, idle | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
 | Moving with no active command | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
 | `current_command` set (busy) | `HOLD` | `DECLINE` `BUSY` | unchanged |
-| `role_epoch` of message < current | `HOLD` | `DECLINE` `STALE_EPOCH` | unchanged |
+| `role_epoch` of message < current | `HOLD` | `ERROR` `STALE_EPOCH` | unchanged |
 
 (`HOLD` is a stop command: it does not require movement, so battery/terrain do
 not block it.)
@@ -63,7 +63,7 @@ not block it.)
 | terrain unsuitable | same | `DECLINE` `TERRAIN_UNSUITABLE` | unchanged |
 | required capability missing | same | `DECLINE` `CAPABILITY_UNAVAILABLE` | unchanged |
 | `current_command` set (busy) | same | `DECLINE` `BUSY` | unchanged |
-| payload missing `waypoint` | same | `DECLINE` `INVALID_REQUEST` (or protocol `ERROR` if caught at validation) | unchanged |
+| payload missing `waypoint` | same | `ERROR` `MISSING_FIELD` | unchanged |
 
 ## RETURN
 
@@ -82,15 +82,15 @@ obstacle does not, since returning to base is the safe fallback.)
 | Given | When | Then response | Then state |
 | --- | --- | --- | --- |
 | Any state | `REPORT_STATUS` | `STATUS_RESPONSE` with the current `state` snapshot | unchanged |
-| `role_epoch` of message < current | `REPORT_STATUS` | `DECLINE` `STALE_EPOCH` | unchanged |
+| `role_epoch` of message < current | `REPORT_STATUS` | `ERROR` `STALE_EPOCH` | unchanged |
 
 (`REPORT_STATUS` is always answerable from any healthy or degraded state; it
 never changes state.)
 
 ## Cross-cutting rules
 
-- A message whose `role_epoch` is **older** than the follower's current epoch is
-  declined `STALE_EPOCH` regardless of command.
+- After validation and authorization, the Follower rejects commands with an
+  older `role_epoch` using `ERROR` with code `STALE_EPOCH`.
 - A malformed or unauthorized message produces a protocol `ERROR`, not a
   `DECLINE` — see [protocol-errors.md](protocol-errors.md).
 - Comply state changes are deterministic: the same (command, state) always

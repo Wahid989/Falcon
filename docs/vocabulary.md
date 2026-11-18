@@ -50,9 +50,8 @@ defined in [state.md](state.md).
 | `TERRAIN_UNSUITABLE` | The current `terrain` is not suitable for the command/role (sponsor-added). |
 | `CAPABILITY_UNAVAILABLE` | A required equipment/capability is missing from `capabilities` (sponsor-added). |
 
-The decision priority order (which reason wins when several apply) is defined
-with the decision engine in Phase 4 (FALCON-037): command validity → battery →
-terrain → capability → availability.
+The [selected implementation policy](acceptance-criteria.md#selected-implementation-policy)
+defines which reason wins when several apply.
 
 ## Role management
 
