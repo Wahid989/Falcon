@@ -30,8 +30,8 @@ not block it.)
 | `battery_percent` < 20 | same | `DECLINE` `BATTERY_CRITICAL` | unchanged |
 | `obstacle_detected` = true | same | `DECLINE` `OBSTACLE_DETECTED` | unchanged |
 | `mechanical_fault` = true | same | `DECLINE` `MECHANICAL_FAULT` | unchanged |
-| terrain unsuitable | same | `DECLINE` `TERRAIN_UNSUITABLE` | unchanged |
-| required capability missing | same | `DECLINE` `CAPABILITY_UNAVAILABLE` | unchanged |
+| `terrain` in the agent's configured unsuitable-terrain set (exact match) | same | `DECLINE` `TERRAIN_UNSUITABLE` | unchanged |
+| command's configured required-capability set not a subset of `capabilities` (exact match, all required) | same | `DECLINE` `CAPABILITY_UNAVAILABLE` | unchanged |
 | `current_command` set (busy) | same | `DECLINE` `BUSY` | unchanged |
 | payload missing `waypoint` | same | `DECLINE` `INVALID_REQUEST` (or protocol `ERROR` if caught at validation) | unchanged |
 
@@ -45,7 +45,8 @@ not block it.)
 | `current_command` set (busy) | `RETURN` | `DECLINE` `BUSY` | unchanged |
 
 (`RETURN` requires movement, so battery and mechanical fault block it; an
-obstacle does not, since returning to base is the safe fallback.)
+obstacle and terrain do not, since returning to base is the safe fallback —
+`RETURN` is not terrain-gated by default.)
 
 ## REPORT_STATUS
 

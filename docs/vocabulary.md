@@ -47,8 +47,19 @@ defined in [state.md](state.md).
 | `BUSY` | `current_command` is not null (already processing a command). |
 | `INVALID_REQUEST` | Command not in the vocabulary, or a required payload field is missing/invalid at the decision layer. |
 | `STALE_EPOCH` | Message `role_epoch` < the follower's current `role_epoch`. |
-| `TERRAIN_UNSUITABLE` | The current `terrain` is not suitable for the command/role (sponsor-added). |
-| `CAPABILITY_UNAVAILABLE` | A required equipment/capability is missing from `capabilities` (sponsor-added). |
+| `TERRAIN_UNSUITABLE` | The agent's current `terrain` is in its **configured unsuitable-terrain set** (exact string match), for a terrain-gated command — `PROCEED_TO_WAYPOINT` only (`RETURN` is the safe fallback and is not terrain-gated by default). Sponsor-added. |
+| `CAPABILITY_UNAVAILABLE` | A command's **configured required-capability set is not a subset** of the agent's `capabilities` (exact string match; all required). Sponsor-added. |
+
+**Configurable, not hardcoded.** Both triggers are driven by per-agent /
+per-command configuration, so no terrain names or mandatory capabilities are
+baked into the code. Defaults are **empty** (no terrain blocked, no capability
+required), which keeps every other command answerable until the sponsor confirms
+values. The decision layer and the role eligibility self-check (FALCON-036)
+share one implementation of each check.
+
+**Sponsor decisions (values, not mechanism):** the terrain value enumeration and
+each command's / the commander role's required capabilities are a team/sponsor
+decision, supplied as configuration — the contract here fixes only the rule.
 
 The decision priority order (which reason wins when several apply) is defined
 with the decision engine in Phase 4 (FALCON-037): command validity → battery →
