@@ -17,12 +17,16 @@ public class AgentLogIngestionTests
     private sealed record Row(
         string MessageId, string LoggedBy, string Direction, string MessageType, int? HierarchyLevel, string Payload);
 
-    /// <summary>Copies the fixture into a nested folder under a fresh session id.</summary>
-    private static (TempLogDirectory Logs, string Session) CopyFixture()
+    private sealed record Handover(
+        string LoggedBy, string RequesterId, string? PreviousCommanderId, string? NewRole,
+        int OldEpoch, int? NewEpoch, string Outcome, int? HierarchyLevel);
+
+    /// <summary>Copies a fixture into a nested folder under a fresh session id.</summary>
+    private static (TempLogDirectory Logs, string Session) CopyFixture(string name = "session-a")
     {
         var logs = new TempLogDirectory();
         var session = LogLines.NewSession();
-        var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "agent-logs", "session-a");
+        var source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "agent-logs", name);
         var target = Path.Combine(logs.Path, "mvp", session);
         Directory.CreateDirectory(target);
         foreach (var file in Directory.EnumerateFiles(source, "*.jsonl"))
@@ -131,5 +135,39 @@ public class AgentLogIngestionTests
 
         Assert.Equal(2, result.FilesScanned);
         Assert.Equal(2, (await RowsAsync(session)).Count);
+    }
+
+    /// <summary>
+    /// A failover logged by the real agents (Fixtures/agent-logs/failover):
+    /// drone-cmd dies, drone-a promotes itself, Ground accepts it as its new
+    /// direct follower, then orders a HOLD through it.
+    /// </summary>
+    [SkippableFact]
+    public async Task BothSidesOfAFailoverReachRoleHandovers()
+    {
+        TestDatabase.SkipIfUnavailable();
+        await TestDatabase.EnsureSchemaAsync();
+        var (logs, session) = CopyFixture("failover");
+        using var _ = logs;
+
+        var result = await TestDatabase.Ingester(logs.Path).IngestAsync(CancellationToken.None);
+        await using var connection = TestDatabase.Connections().Create();
+        var handovers = (await connection.QueryAsync<Handover>(
+            """
+            SELECT LoggedBy, RequesterId, PreviousCommanderId, NewRole,
+                   OldEpoch, NewEpoch, Outcome, HierarchyLevel
+            FROM dbo.RoleHandovers WHERE SessionId = @session ORDER BY LoggedBy
+            """,
+            new { session })).ToList();
+
+        Assert.Equal(0, result.Rejected);
+        Assert.Equal(
+            [
+                new Handover("drone-a", "drone-a", "drone-cmd", "commander", 0, 1, "SELF_PROMOTED", 1),
+                new Handover("ground", "drone-a", "drone-cmd", "commander", 0, 1, "SUCCESSOR_ACCEPTED", 0),
+            ],
+            handovers);
+        // HOLD, two relays and three answers, each logged by sender and receiver.
+        Assert.Equal(12, (await RowsAsync(session)).Count);
     }
 }
