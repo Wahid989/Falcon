@@ -107,3 +107,9 @@ Tests: `tests/unit/test_failover.py` (18). They cover:
 - **Reconnecting links.** The successor must be able to reach the lost
   commander's other followers. That is runtime work, together with FALCON-079
   and 080.
+
+The liveness runtime also holds immediately on explicit parent EOF while
+retaining the configured succession deadline. Brief reconnects do not elect
+a successor, and late in-flight decisions cannot undo fallback. See
+[heartbeat.md](heartbeat.md#complete-livenessfallback-behavior-061062) for the
+061/062 acceptance behavior and remaining shared Phase 8 boundaries.

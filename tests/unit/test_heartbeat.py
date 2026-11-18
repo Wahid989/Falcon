@@ -163,3 +163,68 @@ def test_invalid_configuration(interval, misses):
             interval=interval,
             missed_intervals=misses,
         )
+
+
+def test_explicit_disconnect_holds_immediately_without_early_succession():
+    beat, roles, now, held = monitor()
+    now[0] = 2
+    beat.disconnected("ground")
+    held.assert_called_once()
+    assert beat.parent_unavailable
+    roles.on_commander_lost.assert_not_called()
+    beat.disconnected("ground")
+    held.assert_called_once()
+    now[0] = 14.999
+    beat.poll()
+    roles.on_commander_lost.assert_not_called()
+    now[0] = 15
+    beat.poll()
+    roles.on_commander_lost.assert_called_once_with("ground")
+    held.assert_called_once()
+
+
+def test_brief_disconnect_then_valid_parent_traffic_does_not_false_trigger():
+    beat, roles, now, held = monitor()
+    now[0] = 4
+    beat.disconnected("ground")
+    now[0] = 6
+    assert beat.received(heartbeat(), "ground")
+    assert not beat.parent_unavailable
+    now[0] = 20.999
+    beat.poll()
+    roles.on_commander_lost.assert_not_called()
+    held.assert_called_once()
+
+
+def test_a_child_disconnect_does_not_start_parent_failover():
+    beat, roles, _, held = monitor("ground")
+    beat.disconnected("agent-a")
+    assert not beat.parent_unavailable
+    held.assert_not_called()
+    roles.on_commander_lost.assert_not_called()
+
+
+def test_siblings_receive_identical_shared_status_view():
+    top, top_roles, top_clock, _ = monitor("ground")
+    a, a_roles, a_clock, _ = monitor("agent-a")
+    b, b_roles, b_clock, _ = monitor("agent-b")
+    for agent_id, battery in (("agent-a", 5), ("agent-b", 90)):
+        top.received(
+            heartbeat(
+                agent_id,
+                "ground",
+                payload={"status": {"agent_id": agent_id, "battery_percent": battery}},
+            ),
+            agent_id,
+        )
+    top_clock[0] = a_clock[0] = b_clock[0] = 5
+    summary = top.poll()
+    for message in summary:
+        receiver = a if message["recipient_id"] == "agent-a" else b
+        assert receiver.received(message, "ground")
+    for name in ("agent-a", "agent-b"):
+        assert (
+            a_roles.peer_status[name]
+            == b_roles.peer_status[name]
+            == top_roles.peer_status[name]
+        )

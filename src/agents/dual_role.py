@@ -190,6 +190,7 @@ class DualRoleAgent:
         self.rejected: deque[tuple[Message, str]] = deque(maxlen=KEEP_REJECTED)
         self.incomplete: deque[RelayIncomplete] = deque(maxlen=KEEP_REJECTED)
         self.undeliverable: deque[Message] = deque(maxlen=KEEP_REJECTED)
+        self._held_position = None
         self._heartbeat = None
         self._heartbeat_thread = None
         self.roles = roles
@@ -309,6 +310,14 @@ class DualRoleAgent:
                     observed = accepted and self._heartbeat.received(
                         message, arrived_from
                     )
+                    if (
+                        observed
+                        and arrived_from == self.roles.get_current_commander()
+                        and not self._heartbeat.parent_unavailable
+                    ):
+                        # Fresh, validated parent traffic permits a new command;
+                        # it never resumes an old interrupted movement by itself.
+                        self._held_position = None
                     if message.get("type") == "heartbeat":
                         return "heartbeat" if observed else None
         self._views[arrived_from].deliver(message)
@@ -402,6 +411,12 @@ class DualRoleAgent:
             self.incomplete.append(incomplete)
             self._report_no_response(incomplete)
             return None
+        finally:
+            # A decision already in progress at loss must not undo fallback
+            # when its late state transition completes or its reply fails.
+            with self._roles_lock:
+                if self._held_position is not None:
+                    self._hold_on_loss()
 
     # --- internals -----------------------------------------------------------
 
@@ -411,6 +426,9 @@ class DualRoleAgent:
 
     def _hold_on_loss(self) -> None:
         if self.follower is not None:
+            if self._held_position is None:
+                self._held_position = self.follower.state.position
+            self.follower.state.position = self._held_position
             self.follower.state.movement_flag = False
             self.follower.state.current_command = None
 
@@ -494,6 +512,9 @@ class DualRoleAgent:
                 continue
             except TransportClosedError:
                 if self._links.get(peer) is link:
+                    if self._heartbeat is not None:
+                        with self._roles_lock:
+                            self._heartbeat.disconnected(peer)
                     self._views[peer].close()
                 return
             except TransportError:
