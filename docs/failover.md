@@ -142,8 +142,6 @@ Tests: `tests/unit/test_failover.py` (22). They cover:
   [heartbeat.md](heartbeat.md). It forwards statuses with observe_status and
   calls on_commander_lost after the configured missed intervals. The legacy
   one-shot/interactive MVP runners do not enable RoleManager monitoring.
-- **The eligibility self-check itself** is Maliha's FALCON-036. Until then,
-  `basic_eligibility()` stands in.
 - **A connector for TCP.** Re-linking works through the `connector` and
   `accept_link` hooks and is tested in memory. The TCP runtime still needs
   to supply them (079 and 080).

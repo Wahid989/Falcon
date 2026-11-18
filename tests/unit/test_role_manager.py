@@ -168,6 +168,55 @@ def test_grant_checks_the_requesters_eligibility(status, reason):
     assert commanders(fleet) == ["ground"]
 
 
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        (
+            {
+                "battery_percent": 29,
+                "mechanical_fault": True,
+                "current_command": "RETURN",
+            },
+            "degraded",
+        ),
+        ({"battery_percent": 29}, "degraded"),
+        ({"mechanical_fault": True}, "degraded"),
+        (
+            {
+                "current_command": "RETURN",
+                "terrain": "test-terrain",
+                "capabilities": [],
+            },
+            "busy",
+        ),
+        ({"terrain": "test-terrain", "capabilities": []}, "terrain_unsuitable"),
+        ({"capabilities": ["item-a", "ITEM-B"]}, "equipment_missing"),
+        ({"terrain": "TEST-TERRAIN"}, None),
+        ({}, None),
+    ],
+)
+def test_commander_eligibility_reason_order_and_boundary(overrides, reason):
+    eligibility = basic_eligibility(
+        min_battery=30,
+        unsuitable_terrain=("test-terrain",),
+        required_capabilities=("item-a", "item-b"),
+    )
+    status = {"battery_percent": 30, "capabilities": ["item-b", "item-a"], **overrides}
+    before = {**status, "capabilities": status["capabilities"].copy()}
+
+    assert eligibility(status) == reason
+    assert status == before
+
+
+def test_missing_capabilities_count_as_empty_for_role_eligibility():
+    status = {"battery_percent": 100}
+    assert basic_eligibility()(status) is None
+    assert (
+        basic_eligibility(required_capabilities=("item-a",))(status)
+        == "equipment_missing"
+    )
+
+
 def test_requester_checks_itself_before_asking():
     fleet = managers(statuses={"drone-a": {**FIT, "battery_percent": 5}})
     with pytest.raises(RoleError, match="eligibility check: degraded"):

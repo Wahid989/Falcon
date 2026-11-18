@@ -99,11 +99,11 @@ def basic_eligibility(
     required_capabilities: tuple[str, ...] = (),
     unsuitable_terrain: tuple[str, ...] = (),
 ) -> Eligibility:
-    """A simple fitness check on a status snapshot.
+    """Build the commander eligibility check used for grants and succession.
 
-    A stand-in for the shared eligibility self-check (FALCON-036); pass that
-    in as ``eligibility`` once it exists. Order: degraded, busy, terrain,
-    equipment.
+    Return None for an eligible snapshot or the first role denial reason.
+    Battery below the threshold or a mechanical fault is degraded, followed
+    by busy, unsuitable terrain, and missing equipment.
     """
 
     blocked_terrain = frozenset(unsuitable_terrain)
