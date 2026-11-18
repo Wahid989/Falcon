@@ -70,8 +70,14 @@ roles.handle(replies[0])                # drone-a is now the top at epoch + 1
 `observe(message)` checks the epoch on every non-role message:
 - **Older than ours:** the message is rejected as stale (returns `False`), and
   a `STALE_EPOCH_REJECTED` event is recorded.
-- **Newer than ours:** the agent adopts it. If it thought it was the
-  commander, it steps down to follower (a `stepped_down` record).
+- **Newer than ours, reported from below** (a failover further down): the
+  agent adopts it and keeps its place. If the sender took over from one of
+  its followers, it records `successor_accepted`. See
+  [failover.md](failover.md).
+- **Newer than ours, otherwise:** the agent adopts it. If it thought it was
+  the commander, it steps down to follower (a `stepped_down` record). That
+  happens when a newer commander orders it, or when its own order is refused
+  as `STALE_EPOCH`.
   - If the newer epoch came in a command or heartbeat sent to it, that sender
     is its commander now.
   - Otherwise it waits, with no known commander, until one commands it.

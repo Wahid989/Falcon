@@ -141,6 +141,13 @@ reconnects. The module carries on over it, and the old link is retired: a
 late message on it is ignored, and its closing doesn't affect the new one.
 The exchange log stays whole, because every record is one complete line.
 
+### When the chain changes
+
+After a grant or a failover the agent follows its Role Manager's view: it
+opens links to new peers through `connector`, takes links peers open to it
+with `accept_link`, and moves its modules and log levels to match. See
+[failover.md](failover.md#3b-re-linking-the-running-agents).
+
 ## Relaying commands down the chain
 
 In the sponsor's case, Ground talks only to the Drone Commander, never to the

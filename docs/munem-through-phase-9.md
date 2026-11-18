@@ -39,8 +39,9 @@ branches from main, rather than one silently merged working tree.
 See docs/heartbeat.md. The monitor requires a RoleManager and explicit activation;
 it is not silently enabled in the old MVP CLI. Existing succession logic remains
 with RoleManager. Shared 060/063/064/065 and full fleet acceptance are not closed
-by the heartbeat implementation alone. Missing successor links and module/routing
-reconfiguration remain visible integration work.
+by the heartbeat implementation alone. PR #23 subsequently merged successor relinking and module/routing
+reconfiguration through connector/accept_link hooks. Production TCP wiring of
+those hooks remains later runtime work (079/080).
 
 ## Phase 9 dependencies and owner handoff
 
