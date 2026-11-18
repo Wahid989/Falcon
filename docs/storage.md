@@ -40,11 +40,16 @@ curl http://localhost:8080/health          # Healthy
 
 The storage services run under the Compose `storage` profile.
 
-> **Known issue:** the shared `falcon` network is `internal: true`, which keeps
-> the agents offline but also stops Docker publishing ports 8080 and 1433, so
-> the API and Swagger can't be reached from the host. Until the storage
-> services get a non-internal network of their own, reach the API from a
-> container on `falcon_falcon` (as in the verification command below).
+The storage services use their own ordinary `storage` bridge network. Agents
+remain on the internal `falcon` network and exchange data with storage only
+through the log volume. Published API/SQL ports remain 8080/1433, reachable from
+the development host as `localhost:8080` and `localhost,1433`. Swagger is at
+<http://localhost:8080/swagger>. Recreate the storage containers after updating
+Compose so existing containers join the new network:
+
+```bash
+docker compose --profile storage up -d --build --force-recreate sql-server storage-api
+```
 
 Interactive API docs: <http://localhost:8080/swagger>.
 
@@ -140,8 +145,8 @@ It prints a report and exits `0` when nothing is missing or extra.
 
 ```bash
 # After a run (e.g. python -m scripts.run_mvp), with the storage profile up.
-# The Compose network is internal, so run it on that network:
-MSYS_NO_PATHCONV=1 docker run --rm --network falcon_falcon -v "$PWD:/repo:ro" -w /repo   falcon-agent python -m scripts.verify_storage   --logs logs/mvp/<session> --api http://storage-api:8080
+# Run from the host against the published API:
+python -m scripts.verify_storage --logs logs/mvp/<session> --api http://localhost:8080
 ```
 
 `--no-ingest` skips the ingest request, to check that the background pass
@@ -155,7 +160,7 @@ picked the run up on its own.
 
 # .NET unit + integration tests, using a separate FalconTest database
 MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD/storage:/work" -w /work/dotnet \
-  --network falcon_falcon \
+  --network falcon_storage \
   -e FALCON_TEST_DB="Server=sql-server,1433;Database=FalconTest;User Id=sa;Password=Falcon_local_dev_1;TrustServerCertificate=True" \
   mcr.microsoft.com/dotnet/sdk:8.0 dotnet test
 ```
@@ -185,3 +190,7 @@ CI). The tests cover:
 - rollback;
 - per-file failure isolation;
 - every API endpoint and filter.
+
+The network name above assumes the default Compose project is `falcon`. With
+`docker compose -p NAME`, use `NAME_storage` instead. Connecting a tooling
+container to the internal agent network no longer grants storage access.

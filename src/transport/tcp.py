@@ -4,6 +4,7 @@ import errno
 import ipaddress
 import select
 import socket
+import sys
 from math import isfinite
 from threading import Event, Lock, TIMEOUT_MAX
 from time import monotonic
@@ -106,6 +107,8 @@ class _TCPTransport(Transport):
                     try:
                         count = connection.send(frame[offset:])
                     except BlockingIOError:
+                        if monotonic() >= deadline:
+                            raise TransportTimeoutError("Send timed out")
                         continue
                     if count == 0:
                         raise OSError("Peer disconnected")
@@ -200,7 +203,14 @@ class TCPServerTransport(_TCPTransport):
             if self._listener is None:
                 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
-                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    if sys.platform == "win32":
+                        # Windows SO_REUSEADDR permits a second listener to bind
+                        # the same address. Require exclusive ownership instead.
+                        listener.setsockopt(
+                            socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1
+                        )
+                    else:
+                        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     listener.bind(self._address)
                     listener.listen(1)
                     listener.setblocking(False)

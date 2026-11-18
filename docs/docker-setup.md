@@ -37,3 +37,10 @@ not depend on SQL Server (particularly useful on ARM development machines).
 Inspect service output with `docker compose logs`; rebuild changed source with
 `docker compose build commander`. The full gate cleans up its unique project;
 manual profile runs should use matching profiles when running `down`.
+
+Storage services now use a separate normal `storage` bridge; only agents use
+`falcon` with `internal: true`. Host ports 8080 (API/Swagger) and 1433 (SQL) stay
+published. Recreate existing storage containers with
+`docker compose --profile storage up -d --build --force-recreate sql-server storage-api`
+to apply the network change. The shared log volume remains the only agent/storage
+data path; agents do not join the storage network.

@@ -98,8 +98,10 @@ Tests: `tests/unit/test_failover.py` (18). They cover:
 
 ## Not done here
 
-- **The heartbeat and the 15 s detection** are Munem's FALCON-061 and 062.
-  They call `on_commander_lost` and feed `observe_status`.
+- **Heartbeat activation** is opt-in on DualRoleAgent; see
+  [heartbeat.md](heartbeat.md). It forwards statuses with observe_status and
+  calls on_commander_lost after the configured missed intervals. The legacy
+  one-shot/interactive MVP runners do not enable RoleManager monitoring.
 - **The eligibility self-check itself** is Maliha's FALCON-036. Until then,
   `basic_eligibility()` stands in.
 - **Reconnecting links.** The successor must be able to reach the lost

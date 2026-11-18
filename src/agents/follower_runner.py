@@ -78,7 +78,10 @@ def main(argv=None):
         def stop(*_):
             raise KeyboardInterrupt
 
-        for number in (signal.SIGINT, signal.SIGTERM):
+        shutdown_signals = [signal.SIGINT, signal.SIGTERM]
+        if hasattr(signal, "SIGBREAK"):
+            shutdown_signals.append(signal.SIGBREAK)
+        for number in shutdown_signals:
             previous_handlers[number] = signal.signal(number, stop)
         report({"event": "listening", "host": host, "port": port})
         server.serve(max_commands=args.max_commands)
