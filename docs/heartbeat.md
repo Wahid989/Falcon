@@ -91,3 +91,31 @@ in a new Windows process group; the runner handles SIGBREAK when available.
 Forced Windows terminate() is still available for crash/cleanup tests, but cannot
 claim to exercise graceful shutdown. A Windows CI job runs these regressions;
 macOS/Linux results alone do not certify a Windows run.
+
+## Complete liveness/fallback behavior (061/062)
+
+A confirmed parent EOF now enters safe hold immediately; it does **not** elect a
+successor immediately or reset/shorten the original missed-heartbeat deadline.
+If a fresh link delivers valid parent traffic before the deadline, liveness is
+restored and no election is triggered. Movement is not automatically resumed;
+a new valid command is required. A child's disconnect never declares this
+agent's parent dead.
+
+Hold captures the simulated position, clears movement/current_command, and
+remains enforced when an already-running decision completes late. A reply that
+fails after disconnect cannot undo the hold or move the simulated agent to a
+late waypoint. On confirmed silent loss the existing RoleManager callback still
+runs exactly once, and local state is refreshed before eligibility selection.
+
+Both silent loss on an open TCP socket and explicit EOF are tested with the
+real dual-role runtime. Fake clocks verify the default 5-second/three-interval
+boundary, normal traffic renewal, brief hiccups and consistent sibling status
+views. These are opt-in runtime facilities; activating them in a deployment
+requires a RoleManager and a live status provider at the top as shown above.
+
+This completes Munem's liveness/fallback implementation in its documented runtime
+scope. It does not certify the entire Phase 8 milestone: full eligibility policy,
+successor-announcement cascade timing, post-promotion link/module reconfiguration,
+and the full fleet failover harness remain coordinated/shared work. In particular,
+changing the current top must not be advertised as a working end-to-end fleet
+handover until those missing runtime paths are covered.

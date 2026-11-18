@@ -146,6 +146,9 @@ Tests: `tests/unit/test_failover.py` (22). They cover:
   `basic_eligibility()` stands in.
 - **A connector for TCP.** Re-linking works through the `connector` and
   `accept_link` hooks and is tested in memory. The TCP runtime still needs
-  to supply them (dial a peer's listener, hand incoming links to
-  `accept_link`); that comes with the multi-agent runtime (079 and 080).
+  to supply them (079 and 080).
 - **A revived commander rejoining over TCP** needs the same hooks.
+
+The liveness runtime holds immediately on explicit parent EOF while retaining
+its succession deadline. Brief reconnects do not elect a successor, and late
+in-flight decisions cannot undo fallback. See [heartbeat.md](heartbeat.md).

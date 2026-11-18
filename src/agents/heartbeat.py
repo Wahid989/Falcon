@@ -57,6 +57,7 @@ class HeartbeatMonitor:
         self._parent = roles.get_current_commander()
         self._last_parent = clock()
         self._lost = False
+        self._disconnected = False
         self._activity_lock = Lock()
         self._activity = {peer: clock() for peer in roles.known_peers()}
 
@@ -66,7 +67,22 @@ class HeartbeatMonitor:
             self._parent = parent
             self._last_parent = self.clock()
             self._lost = False
+            self._disconnected = False
         return parent
+
+    @property
+    def parent_unavailable(self):
+        return self._disconnected or self._lost
+
+    def disconnected(self, peer):
+        """Hold on confirmed EOF immediately, but keep the original loss deadline.
+
+        A reconnect must deliver valid parent traffic to restore liveness. EOF
+        alone does not shorten the missed-interval succession window.
+        """
+        if peer == self._sync_parent() and not self.parent_unavailable:
+            self._disconnected = True
+            self.on_lost()
 
     def sent(self, peer):
         with self._activity_lock:
@@ -104,6 +120,8 @@ class HeartbeatMonitor:
             self.sent(peer)
         if peer == parent:
             self._last_parent = self.clock()
+            if not self._lost:
+                self._disconnected = False
         return True
 
     def _message(self, peer, payload, role):
@@ -141,7 +159,8 @@ class HeartbeatMonitor:
             and now - self._last_parent >= self.interval * self.missed_intervals
         ):
             self._lost = True  # Once per loss, even if no successor can promote.
-            self.on_lost()
+            if not self._disconnected:
+                self.on_lost()
             held = {
                 key: deepcopy(value)
                 for key, value in self.status().items()
