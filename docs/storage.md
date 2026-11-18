@@ -95,7 +95,7 @@ A `message` record example:
 {"record_type":"message","session_id":"run-42","logged_by":"ground",
  "logged_at":"2026-10-13T12:00:01.005Z","direction":"sent","hierarchy_level":0,
  "message":{"message_id":"m-1","sender_id":"ground","recipient_id":"drone-cmd",
-            "timestamp":"2026-10-13T12:00:01Z","schema_version":"1.0",
+            "timestamp":"2026-10-13T12:00:01Z","schema_version":1,
             "sender_role":"commander","role_epoch":1,"type":"command",
             "payload":{"command":"HOLD"}}}
 ```
@@ -113,8 +113,9 @@ What each record type needs:
 agent's own level. For a received message it is the sender's level, or `null`
 if the sender is unknown.
 
-This format is the storage side's proposal, to be confirmed with the log
-writer (FALCON-039–041) and the envelope (FALCON-014). The parser is
+The log writer now emits this format for messages, role transitions and events.
+See [logging.md](logging.md) for rotation, flushing, dynamic levels and lifecycle.
+The parser is
 `storage/dotnet/src/FalconStorage/Ingestion/LogRecordParser.cs`.
 
 **Rules for the writer**
@@ -194,3 +195,8 @@ CI). The tests cover:
 The network name above assumes the default Compose project is `falcon`. With
 `docker compose -p NAME`, use `NAME_storage` instead. Connecting a tooling
 container to the internal agent network no longer grants storage access.
+
+The Python writer retains the active .jsonl and ten renamed .jsonl.N archives
+by default, rotating at 100,000,000 UTF-8 bytes before a whole record. Keep
+ingestion faster than retention turnover. Nondefault buffered batching requires
+flush/close before expecting all new records to be visible to the ingester.

@@ -107,6 +107,15 @@ class Follower:
             self._exchange_log.record("received", message)
         valid, problems = self._validate(message)
         if not valid:
+            if self._exchange_log is not None:
+                self._exchange_log.event(
+                    "INVALID_MESSAGE",
+                    {
+                        "message_id": message.get("message_id"),
+                        "sender_id": message.get("sender_id"),
+                        "problems": problems,
+                    },
+                )
             return self._send_error_for_invalid_message(message, problems)
         if message["recipient_id"] != self.agent_id:
             return self._send_error(
@@ -318,12 +327,27 @@ class Follower:
     def _send_validated(self, message: Message) -> None:
         valid, errors = self._validate(message)
         if not valid:
+            if self._exchange_log is not None:
+                self._exchange_log.event(
+                    "INVALID_OUTGOING_RESPONSE",
+                    {"problems": errors, "message_id": message.get("message_id")},
+                )
             raise InvalidFollowerResponseError(
                 "constructed response failed validation: " + "; ".join(errors)
             )
         self.transport.send(message)
         if self._exchange_log is not None:
             self._exchange_log.record("sent", message)
+            if message.get("payload", {}).get("response") == "ERROR":
+                self._exchange_log.event(
+                    "PROTOCOL_ERROR",
+                    {
+                        "message_id": message["message_id"],
+                        "in_reply_to": message["payload"]["in_reply_to"],
+                        "recipient_id": message["recipient_id"],
+                        "error": message["payload"]["error"],
+                    },
+                )
 
     def status_snapshot(self) -> dict[str, JSONValue]:
         """Return wire-safe state without the log-only hierarchy level."""

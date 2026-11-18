@@ -135,6 +135,7 @@ def exchange_logger_for(
         session_id=session_id,
         level=hierarchy.level_of(agent_id),
         peer_levels=hierarchy.peer_levels(agent_id),
+        hierarchy=hierarchy,
     )
 
 
@@ -201,6 +202,12 @@ class DualRoleAgent:
         self._heartbeat = None
         self._heartbeat_thread = None
         self.roles = roles
+        if exchange_log is not None:
+            exchange_log.bind_hierarchy(
+                lambda: roles.hierarchy if roles is not None else self.hierarchy
+            )
+            if roles is not None:
+                roles.add_record_sink(exchange_log.write_record)
         self._roles_lock = threading.Lock()
         self.relaying: RelayingDecision | None = None
         self._connector = connector
@@ -331,7 +338,23 @@ class DualRoleAgent:
                 if message.get("type") in ROLE_TYPES:
                     if self._heartbeat is not None:
                         self._heartbeat.received(message, arrived_from)
+                    if self._exchange_log is not None:
+                        self._exchange_log.record("received", message)
+                    ignored = self.roles.ignored[-1] if self.roles.ignored else None
                     replies = self.roles.handle(message)
+                    if (
+                        self._exchange_log is not None
+                        and self.roles.ignored
+                        and self.roles.ignored[-1] is not ignored
+                    ):
+                        self._exchange_log.event(
+                            "ROLE_MESSAGE_REJECTED",
+                            {
+                                "message_id": message.get("message_id"),
+                                "sender_id": arrived_from,
+                                "reason": self.roles.ignored[-1][1],
+                            },
+                        )
                     self._sync_epoch()
                     self._send_all(self._after_change(replies))
                     return "roles"
@@ -368,6 +391,8 @@ class DualRoleAgent:
                 )
             self._links[request["recipient_id"]].send(request)
             self._note_sent(request["recipient_id"])
+            if self._exchange_log is not None:
+                self._exchange_log.record("sent", request)
         return request
 
     def start(self) -> None:
@@ -432,6 +457,11 @@ class DualRoleAgent:
         self._readers.clear()
         for view in self._views.values():
             view.close()
+        if self._exchange_log is not None:
+            if self.roles is not None:
+                with self._roles_lock:
+                    self.roles.remove_record_sink(self._exchange_log.write_record)
+            self._exchange_log.flush()
 
     def __enter__(self) -> DualRoleAgent:
         self.start()
@@ -643,6 +673,8 @@ class DualRoleAgent:
                 continue
             try:
                 link.send(message)
+                if self._exchange_log is not None:
+                    self._exchange_log.record("sent", message)
                 self._note_sent(message["recipient_id"])
             except TransportError:
                 self.undeliverable.append(message)
@@ -665,7 +697,11 @@ class DualRoleAgent:
                 if self._links.get(peer) is link:
                     self._views[peer].close()
                 return
-            except TransportError:
+            except TransportError as exc:
+                if self._exchange_log is not None:
+                    self._exchange_log.event(
+                        "TRANSPORT_ERROR", {"peer_id": peer, "error": str(exc)}
+                    )
                 # A garbled frame: the transport has already dropped it.
                 continue
             self.dispatch(message, peer)
@@ -679,12 +715,28 @@ class DualRoleAgent:
                 f"message claims to be from {sender!r} but came from {arrived_from!r}"
             )
         self.rejected.append((message, reason))
+        if self._exchange_log is not None:
+            if isinstance(message, dict):
+                self._exchange_log.record("received", message)
+            self._exchange_log.event(
+                "UNAUTHORIZED_PEER",
+                {
+                    "sender_id": sender,
+                    "arrived_from": arrived_from,
+                    "reason": reason,
+                    "message_id": (
+                        message.get("message_id") if isinstance(message, dict) else None
+                    ),
+                },
+            )
         if self._on_reject is not None:
             self._on_reject(message, reason)
         reply = self._error_reply(message, arrived_from, reason)
         if reply is not None:
             try:
                 self._links[arrived_from].send(reply)
+                if self._exchange_log is not None:
+                    self._exchange_log.record("sent", reply)
             except TransportError:
                 pass
 

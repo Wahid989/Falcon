@@ -202,6 +202,7 @@ def run_checkpoint(followers, *, log_dir, session_id, timeout=5):
     finally:
         for link in links:
             link.close()
+        logger.close()
 
 
 def main(argv=None):

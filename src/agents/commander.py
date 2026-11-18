@@ -207,6 +207,10 @@ class Commander:
         }
         ok, errors = self._validate(message)
         if not ok:
+            if self._exchange_log is not None:
+                self._exchange_log.event(
+                    "INVALID_COMMAND", {"command": command, "problems": errors}
+                )
             raise InvalidCommandError(list(errors) or ["message is invalid"])
         return message
 
@@ -265,7 +269,27 @@ class Commander:
                 if self._exchange_log is not None:
                     self._exchange_log.record("received", message)
             except TransportTimeoutError:
+                if self._exchange_log is not None:
+                    self._exchange_log.event(
+                        "RESPONSE_TIMEOUT",
+                        {
+                            "message_id": command["message_id"],
+                            "peer_id": command["recipient_id"],
+                        },
+                        severity="WARNING",
+                    )
                 return self._timed_out(link, command)
+            except TransportError as exc:
+                if self._exchange_log is not None:
+                    self._exchange_log.event(
+                        "CONNECTION_LOST",
+                        {
+                            "message_id": command["message_id"],
+                            "peer_id": command["recipient_id"],
+                            "error": str(exc),
+                        },
+                    )
+                raise
             settled = self._accept(link, command, message)
             if settled is not None:
                 link.pending.discard(message_id)
@@ -305,7 +329,19 @@ class Commander:
             raise UnknownFollowerError(f"No link to follower {follower_id!r}") from None
 
     def _send(self, link: _Link, message: Message) -> None:
-        link.transport.send(message)
+        try:
+            link.transport.send(message)
+        except TransportError as exc:
+            if self._exchange_log is not None:
+                self._exchange_log.event(
+                    "SEND_FAILED",
+                    {
+                        "message_id": message["message_id"],
+                        "peer_id": message["recipient_id"],
+                        "error": str(exc),
+                    },
+                )
+            raise
         if self._exchange_log is not None:
             self._exchange_log.record("sent", message)
         link.pending.add(message["message_id"])
@@ -330,6 +366,16 @@ class Commander:
         problems = self._response_problems(command["recipient_id"], message)
 
         if problems:
+            if self._exchange_log is not None:
+                self._exchange_log.event(
+                    "INVALID_RESPONSE",
+                    {
+                        "message_id": message.get("message_id"),
+                        "in_reply_to": in_reply_to,
+                        "sender_id": message.get("sender_id"),
+                        "problems": problems,
+                    },
+                )
             link.rejected.append((message, problems))
             if answers_command:
                 return CommandResult(

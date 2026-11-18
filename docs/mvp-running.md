@@ -166,16 +166,18 @@ default. FALCON_LOG_ROOT selects the host bind directory (default `./logs`).
 
 - Every record ends with a newline and is appended; existing files are preserved.
 - Each write closes/flushed its file before returning. There is no per-write
-  fsync guarantee, crash-atomic filesystem transaction, cross-process file lock,
-  or rotation in this milestone. Use one process/writer per agent file.
+  fsync guarantee, crash-atomic filesystem transaction, or cross-process file lock.
+  The extended writer now supports rotation and optional batched buffering; see
+  [logging.md](logging.md). Use one process/writer per agent file.
 - Heartbeats are excluded. hierarchy_level is log-only: own level for sent
   messages, known sender level for receives, or null if unknown. The MVP is a
   flat hierarchy (Commander 0, all followers 1); dynamic enrichment is later work.
 - Logging failures are visible and fail the CLI/checkpoint; evidence is not
   silently discarded. A send may already have happened before its log fails,
   so this is not permission to replay the command.
-- These are exchange logs only. Full event/state/role logs, rotation, and dynamic
-  hierarchy enrichment remain FALCON-039–041. The record shape matches the .NET
+- The extended writer now supports role/event records, rotation and dynamic
+  hierarchy metadata through FALCON-039–041. The flat MVP gate still verifies
+  exchange records only; see [logging.md](logging.md). The record shape matches the .NET
   ingestion contract, but SQL ingestion is not required or certified by this gate.
 
 ## Decision policy and scope
