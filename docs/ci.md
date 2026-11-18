@@ -68,3 +68,30 @@ the pinned dependencies on windows-latest. It runs the socket regression file
 and the graceful idle Follower shutdown test. The existing Linux job remains
 unchanged. Windows termination uses CTRL_BREAK_EVENT in a new process group;
 Popen.terminate() is a forced kill there and cannot test Python cleanup.
+
+## Storage integration (043)
+
+`Storage integration (agents + SQL)` runs independently on Ubuntu with Python
+3.12, .NET 8 and a fresh SQL Server 2022 container. It generates logs using the
+real Commander and Follower integration helper (HOLD, low-battery RETURN decline,
+REPORT_STATUS, plus an excluded heartbeat), then starts the storage API against
+those files. It runs the SQL scripts and the full .NET suite, including the
+existing constraints, concurrency, rollback, rotation and ingestion tests.
+`FALCON_REQUIRE_DB=1` and an explicit test connection prevent database tests
+from silently skipping. The test database is separate from the API database.
+
+Finally, two `scripts.verify_storage` passes require all twelve message records
+(six wire messages, sender and receiver copies) to be stored with their original
+agent, direction and hierarchy level, without extra rows on re-ingestion. The
+Python job separately checks the live format against the committed .NET fixture,
+role/error records and dynamic levels after grants.
+
+The isolated Compose project is removed even on failure. JSON comparison reports,
+TRX results, fresh logs and Compose output are uploaded as
+`storage-integration-evidence`. Add `Storage integration (agents + SQL)` to main's
+required checks after its first successful run; changing branch protection is a
+repository-admin action, not part of the workflow file.
+
+This job verifies log-to-database compatibility using in-memory agent transport;
+the separate Docker MVP job verifies real TCP exchanges. Neither claims to run
+the later Phase 9 depth/scenario matrix.

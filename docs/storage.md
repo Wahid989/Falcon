@@ -200,3 +200,35 @@ The Python writer retains the active .jsonl and ten renamed .jsonl.N archives
 by default, rotating at 100,000,000 UTF-8 bytes before a whole record. Keep
 ingestion faster than retention turnover. Nondefault buffered batching requires
 flush/close before expecting all new records to be visible to the ingester.
+
+## Munem's Phase 5 acceptance and handoff
+
+039–041 are implemented in the Python writer and agent integrations; see
+[logging.md](logging.md). Munem's 043 work connects both runtimes, checks exchange
+content and hierarchy levels, and runs the storage verification in CI. Himel owns
+the schema, ingester/API and SQL test implementations. The new
+[storage CI job](ci.md#storage-integration-043) executes those existing tests with
+a mandatory live database rather than treating a build as storage acceptance.
+
+To reproduce its agent-log comparison locally, from the repository root:
+
+```bash
+# Use a NEW empty directory/session so earlier runs cannot inflate counts.
+mkdir -p logs/storage-demo
+.venv/bin/python - <<'PY'
+import runpy
+from pathlib import Path
+helper = runpy.run_path("tests/integration/test_exchange_log_content.py")
+helper["run_exchange"](Path("logs/storage-demo"), session_id="storage-demo")
+PY
+docker compose --profile storage up -d --build --wait sql-server storage-api
+curl --fail --retry 30 --retry-connrefused --retry-delay 2 http://localhost:8080/health
+.venv/bin/python -m scripts.verify_storage --logs logs/storage-demo
+.venv/bin/python -m scripts.verify_storage --logs logs/storage-demo
+```
+
+Both reports should show `ok: true`, `logged_records: 12`, `stored_rows: 12`,
+and empty `missing`/`unexpected` arrays. Use the SQL/.NET test commands above for
+constraints, concurrency and rollback. SQL Server's container targets x86-64;
+on Apple Silicon use an appropriate x86-64 Docker environment or the Ubuntu CI
+job for this live database check. A Python-only pass does not prove SQL storage.
