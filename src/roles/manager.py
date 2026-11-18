@@ -30,8 +30,10 @@ Rules (FALCON-045 to 051):
   (the new top, and the old top that now sits one level below it); deeper
   levels are not notified.
 - Anything carrying an older epoch is rejected as stale and logged. A
-  commander that sees a newer epoch steps down to follower and never takes
-  the role back on its own.
+  commander steps down to follower, and never takes the role back on its
+  own, when a newer commander orders it or its own orders are refused as
+  stale. A newer epoch reported from below (a failover further down) is
+  adopted without stepping down.
 """
 
 from __future__ import annotations
@@ -44,11 +46,26 @@ from enum import Enum
 from typing import Callable, Mapping
 
 from src.agents.hierarchy import Hierarchy
-from src.roles.failover import choose_successor
+from src.roles.failover import choose_successor, succession_candidates
 from src.transport import Message
 
 SCHEMA_VERSION = 1
 KEEP = 256
+# The fields an upward status heartbeat may carry (the schema's status_snapshot).
+STATUS_FIELDS = frozenset(
+    {
+        "battery_percent",
+        "obstacle_detected",
+        "mechanical_fault",
+        "terrain",
+        "capabilities",
+        "position",
+        "movement_flag",
+        "current_command",
+        "current_role",
+        "role_epoch",
+    }
+)
 
 Validator = Callable[[Message], tuple[bool, list[str]]]
 # Returns a deny reason, or None when the agent is fit to command.
@@ -221,6 +238,13 @@ class RoleManager:
         self.vacant = False
         return self._next_candidate()
 
+    @property
+    def awaited_successor(self) -> str | None:
+        """During a failover, the other agent expected to announce itself."""
+        if self._lost is None or self._expected == self.agent_id:
+            return None
+        return self._expected
+
     def candidate_timed_out(self) -> list[Message]:
         """The expected successor never announced itself; move to the next one."""
         if self._lost is None or self._expected is None:
@@ -276,13 +300,40 @@ class RoleManager:
             target=self.agent_id,
             new_role=Role.COMMANDER,
         )
-        return [
+        announcements = [
             self._envelope(
                 follower, "heartbeat", Role.COMMANDER, {"status_summary": []}
             )
             for follower in self.followers()
             if follower != failed
         ]
+        report = self.status_report()
+        if report is not None:
+            announcements.append(report)
+        return announcements
+
+    def status_report(
+        self, status: Mapping[str, object] | None = None
+    ) -> Message | None:
+        """An upward heartbeat with this agent's own status, at its epoch.
+
+        Used to tell the commander above about a new epoch straight away.
+        ``status`` defaults to the agent's status source. None at the top, or
+        when the status can't make a valid heartbeat.
+        """
+        parent = self.get_current_commander()
+        if parent is None:
+            return None
+        source = self._status() if status is None else status
+        status = {key: value for key, value in source.items() if key in STATUS_FIELDS}
+        status["role_epoch"] = self.role_epoch
+        status["agent_id"] = self.agent_id
+        try:
+            return self._envelope(
+                parent, "heartbeat", Role.FOLLOWER, {"status": status}
+            )
+        except RoleError:
+            return None
 
     def _end_failover(self) -> None:
         self._lost = None
@@ -358,6 +409,8 @@ class RoleManager:
             self._stale(message)
             return False
         if epoch > self.role_epoch:
+            if self._accept_report_from_below(message, epoch):
+                return True
             if not self._accept_newer_authority(message, epoch):
                 return False
             self._adopt_newer_epoch(message, epoch)
@@ -507,6 +560,49 @@ class RoleManager:
             }
         )
 
+    def _accept_report_from_below(self, message: Message, epoch: int) -> bool:
+        """A newer epoch reported by an agent this one commands.
+
+        That means a failover happened further down: this agent keeps its
+        place and adopts the epoch. If the sender is taking over from one of
+        this agent's direct followers, the chain is updated: the sender now
+        reports here directly. A ``STALE_EPOCH`` error is not a report: it
+        means this agent's own orders are outdated (it was replaced).
+        """
+        sender = message.get("sender_id")
+        if (
+            message.get("sender_role") != Role.FOLLOWER.value
+            or message.get("recipient_id") != self.agent_id
+            or not isinstance(sender, str)
+            or sender not in self.hierarchy
+            or sender == self.agent_id
+            or self.agent_id not in self.hierarchy.path_to_top(sender)[1:]
+            or _error_code(message) == "STALE_EPOCH"
+            or self._awaiting_commander
+        ):
+            return False
+        old_epoch = self.role_epoch
+        path = self.hierarchy.path_to_top(sender)
+        # This agent's direct follower on the way up from the sender.
+        failed = path[path.index(self.agent_id) - 1]
+        if sender == failed or sender not in succession_candidates(
+            self.hierarchy, failed
+        ):
+            # Just a newer epoch climbing up the chain.
+            self.hierarchy = Hierarchy(_parents(self.hierarchy), role_epoch=epoch)
+            return True
+        self.hierarchy = self.hierarchy.after_failure(failed, sender, role_epoch=epoch)
+        self._record_change(
+            sender,
+            "successor_accepted",
+            old_epoch,
+            epoch,
+            None,
+            failed,
+            new_role=Role.COMMANDER,
+        )
+        return True
+
     def _accept_newer_authority(self, message: Message, epoch: int) -> bool:
         """Decide whether a newer-epoch order from a commander is legitimate.
 
@@ -650,10 +746,10 @@ class RoleManager:
                 "requester_id": requester,
                 "target_commander_id": target or self.agent_id,
                 "previous_commander_id": previous_commander,
-                "previous_role": previous_role.value.upper(),
+                "previous_role": previous_role.value,
                 "new_role": (
                     new_role or (Role.COMMANDER if granted else previous_role)
-                ).value.upper(),
+                ).value,
                 "old_epoch": old_epoch,
                 "new_epoch": new_epoch,
                 "outcome": outcome,
@@ -680,3 +776,11 @@ def _parents(hierarchy: Hierarchy) -> dict[str, str | None]:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _error_code(message: Message) -> str | None:
+    payload = message.get("payload")
+    if message.get("type") != "response" or not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    return error.get("code") if isinstance(error, dict) else None

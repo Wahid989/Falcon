@@ -42,18 +42,54 @@ the same answer.
     commander's place: it **keeps its own followers**, gains the lost
     commander's other followers, and the lost commander stays in the chain as
     its follower. It then **announces** itself with a heartbeat at the new
-    epoch to each of its followers.
+    epoch to each of its followers, and reports upward to its new commander
+    (the lost commander's commander) with a heartbeat carrying its status.
   - **If it fails** (its condition changed since the last heartbeat): it
     records `promotion_declined` with the reason and doesn't promote.
 - **Cascade.** A survivor that hears no announcement from the expected
   successor in time calls `candidate_timed_out()` and expects the next
-  candidate. The timing belongs to the runtime.
+  candidate. A running agent does this itself: the expected successor gets
+  the same window as a lost commander (interval x missed intervals).
 - **Accepting.** A survivor accepts a newer-epoch heartbeat or command only
   from its own commander, or from the agent the rule designates, and then
   updates its view of the chain the same way the successor did. Anything else
   is an **out-of-turn claim**: it is refused, and an `UNAUTHORIZED_PROMOTION`
   event is recorded. A survivor that missed the loss still accepts the
   designated successor, because it can work out the same answer.
+- **The commander above.** It accepts the successor's upward report and
+  updates its chain the same way (`successor_accepted`). It **stays where it
+  is**: a newer epoch reported from below means a failover happened further
+  down, not that it was replaced. It accepts a successor from the lost
+  agent's candidates (its followers, or one level deeper). It does not have
+  their statuses, so it can't re-run the eligibility part of the rule; the
+  survivors below are the ones that refuse an out-of-turn claim.
+- **The epoch climbs.** Any agent that adopts a newer epoch from below
+  reports it upward straight away, so the agents above don't send orders that
+  would be refused as stale.
+
+## 3b. Re-linking the running agents
+
+The Role Manager changes the chain; the `DualRoleAgent` then follows it:
+- It opens links to its new peers through the runtime's `connector`
+  (a function from peer id to a fresh link). A peer it can't reach, such as
+  the lost commander, is skipped.
+- The peer at the other end takes the new link with `accept_link`. Messages
+  on it are only accepted once the Role Manager accepts the sender (the
+  designated successor, or a successor reporting upward).
+- The Commander module drops followers it no longer has and adds new ones;
+  the Follower module answers its new commander; a successor relays orders
+  to its new followers (when a relay timeout is set); the exchange log
+  stamps the new levels.
+- The old link to a lost commander is never reused. If that agent comes
+  back, it gets a fresh link (`accept_link` or `replace_link`), and only then
+  rejoins as a follower.
+
+Tests: `tests/integration/test_failover_relinking.py` runs Ground ->
+Drone Commander -> three drones with heartbeats on, kills the Drone Commander,
+and checks that drone-a takes over, the other drones and Ground accept it,
+Ground stays the top, and Ground's next order goes through drone-a to the
+drones. Also: an unfit first candidate skipped, a first candidate that dies
+too (time-out to the next), and a failover in the middle of a 4-level chain.
 
 ## 4. Invalidation (FALCON-064)
 
@@ -72,7 +108,8 @@ ingests, as `role_change` records:
 - `self_promoted`;
 - `promotion_declined` (with a reason);
 - `vacant`;
-- `stepped_down`.
+- `stepped_down`;
+- `successor_accepted` (by the commander above).
 
 Stale and out-of-turn rejections are `event` records.
 
@@ -84,7 +121,7 @@ Stale and out-of-turn rejections are `event` records.
 | The chain after a takeover | `Hierarchy.after_failure` in `src/agents/hierarchy.py` |
 | Loss, live re-check, promotion, cascade, vacancy, accepting or refusing | `on_commander_lost`, `candidate_timed_out`, `observe` on `RoleManager` (`src/roles/manager.py`) |
 
-Tests: `tests/unit/test_failover.py` (18). They cover:
+Tests: `tests/unit/test_failover.py` (22). They cover:
 - the candidate order;
 - every selection case;
 - the takeover structure, including the deeper case;
@@ -95,6 +132,9 @@ Tests: `tests/unit/test_failover.py` (18). They cover:
 - a survivor that missed the loss;
 - a revived commander, with its delayed old order refused;
 - out-of-turn claims, during a failover and without one.
+- the commander above accepting the successor (also one level deeper) and
+  staying the top;
+- a survivor timing out an expected successor that never announces.
 
 ## Not done here
 
@@ -104,6 +144,8 @@ Tests: `tests/unit/test_failover.py` (18). They cover:
   one-shot/interactive MVP runners do not enable RoleManager monitoring.
 - **The eligibility self-check itself** is Maliha's FALCON-036. Until then,
   `basic_eligibility()` stands in.
-- **Reconnecting links.** The successor must be able to reach the lost
-  commander's other followers. That is runtime work, together with FALCON-079
-  and 080.
+- **A connector for TCP.** Re-linking works through the `connector` and
+  `accept_link` hooks and is tested in memory. The TCP runtime still needs
+  to supply them (dial a peer's listener, hand incoming links to
+  `accept_link`); that comes with the multi-agent runtime (079 and 080).
+- **A revived commander rejoining over TCP** needs the same hooks.

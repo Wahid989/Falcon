@@ -270,3 +270,72 @@ def test_out_of_turn_claim_without_any_failure_is_refused():
     managers = fleet()
     assert managers["agent-b"].observe(heartbeat("agent-c", "agent-b", 5)) is False
     assert managers["agent-b"].role_epoch == 0
+
+
+# --- the commander above a failover ---------------------------------------------
+
+# top -> mid -> {x, y}, and x has x1 below it. mid is the one that fails.
+DEEP = Hierarchy({"top": None, "mid": "top", "x": "mid", "y": "mid", "x1": "x"})
+
+
+def report(sender, recipient, epoch):
+    message = heartbeat(sender, recipient, epoch)
+    message.update(sender_role="follower", payload={"status": {"battery_percent": 80}})
+    return message
+
+
+def test_the_successor_reports_to_the_commander_above_which_stays_top():
+    managers = fleet(DEEP)
+    out = lose(managers, "mid", ("x", "y"))
+
+    (up,) = [m for m in out if m["recipient_id"] == "top"]
+    assert (up["sender_id"], up["sender_role"], up["role_epoch"]) == (
+        "x",
+        "follower",
+        1,
+    )
+    deliver(managers, [up])
+
+    top = managers["top"]
+    assert top.role is Role.COMMANDER
+    assert top.followers() == ("x",)
+    assert top.role_epoch == 1
+    (change,) = [r for r in top.records if r.get("outcome")]
+    assert change["outcome"] == "successor_accepted"
+    assert change["requester_id"] == "x"
+    assert change["previous_commander_id"] == "mid"
+    assert change["new_role"] == "commander"
+
+
+def test_a_successor_from_one_level_deeper_is_accepted_above():
+    unfit = {"x": UNFIT, "y": UNFIT}
+    managers = fleet(DEEP, live=unfit, shared=unfit)
+    out = lose(managers, "mid", ("x", "y", "x1"))
+
+    (up,) = [m for m in out if m["recipient_id"] == "top"]
+    assert up["sender_id"] == "x1"
+    deliver(managers, [up])
+    assert managers["top"].followers() == ("x1",)
+    assert managers["top"].role is Role.COMMANDER
+
+
+def test_a_newer_epoch_from_a_direct_follower_does_not_unseat_the_top():
+    managers = fleet(DEEP)
+    top = managers["top"]
+
+    assert top.observe(report("mid", "top", 3)) is True
+
+    assert top.role is Role.COMMANDER
+    assert top.role_epoch == 3
+    assert top.followers() == ("mid",)
+    assert not [r for r in top.records if r.get("outcome")]
+
+
+def test_a_successor_waiting_on_another_can_time_it_out():
+    managers = fleet(DEEP)
+    managers["y"].on_commander_lost("mid")
+    assert managers["y"].awaited_successor == "x"
+
+    managers["y"].candidate_timed_out()  # x never announced itself
+    assert managers["y"].awaited_successor is None  # y is next, and promoted
+    assert managers["y"].followers() == ("mid", "x")
