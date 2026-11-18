@@ -186,6 +186,34 @@ def test_real_agent_processes_all_commands_and_state(processes, tmp_path):
     assert commander.process.wait(timeout=2) == 0
 
 
+def test_per_agent_suitability_flags_reach_real_follower(processes, tmp_path):
+    scenario = tmp_path / "terrain.yml"
+    scenario.write_text("terrain: fixture\ncapabilities: [item-a]\n")
+    follower = processes(
+        "src.agents.follower_runner",
+        "--port",
+        "0",
+        "--state",
+        str(scenario),
+        "--unsuitable-terrain",
+        "fixture",
+        "--require-capability",
+        "RETURN=item-b",
+    )
+    commander = start_commander(processes, follower.record()["port"])
+    before = follower.record()["state"]
+
+    for command, reason in (
+        ("PROCEED_TO_WAYPOINT north-fence", "TERRAIN_UNSUITABLE"),
+        ("RETURN", "CAPABILITY_UNAVAILABLE"),
+    ):
+        commander.send(command)
+        reply = commander.record()
+        assert reply["outcome"] == "DECLINE"
+        assert reply["reason"] == reason
+        assert follower.record()["state"] == before
+
+
 def test_low_battery_decline_uses_real_follower(processes, tmp_path):
     scenario = tmp_path / "low.yml"
     scenario.write_text("battery_percent: 5\nposition: north-fence\n")

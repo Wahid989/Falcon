@@ -6,18 +6,48 @@ harness (Phase 9). State fields are defined in [state.md](state.md); reasons in
 [vocabulary.md](vocabulary.md).
 
 Notation: **Given** a follower state, **When** it receives a command, **Then**
-it returns a response and its state becomes as stated. The decision priority
-order is: command validity → stale epoch → battery → terrain → capability →
-availability.
+it returns a response and its state becomes as stated.
+
+## Selected implementation policy
+
+Command validity → battery → mechanical fault → obstacle → terrain →
+capability → busy → COMPLY. The first applicable guard determines the
+decline reason. The plan left the placement of the mechanical fault and
+obstacle guards unspecified. Their placement here is flagged for team review.
+
+The Follower validates commands and checks sender authority and epoch before
+invoking the policy. The terrain and capability guards use local configuration
+and default to empty restrictions.
+
+### Command suitability configuration
+
+- Terrain is blocked when the agent's current `terrain` exactly matches a
+  configured unsuitable value. The guard applies to `PROCEED_TO_WAYPOINT`.
+  `RETURN` uses it only when explicitly enabled. `HOLD` and `REPORT_STATUS`
+  skip the terrain guard. Unknown terrain strings pass the guard unless
+  explicitly configured as unsuitable. A scenario with no terrain override
+  uses the state model's default.
+- Every configured capability for a command must be present in the agent's
+  `capabilities`, with exact string matching. Requirements can be configured
+  for `PROCEED_TO_WAYPOINT`, `RETURN`, and `HOLD`. `REPORT_STATUS` remains
+  answerable regardless of equipment or other degraded state.
+- Configure each built-in Follower runner with repeatable
+  `--unsuitable-terrain VALUE` and `--require-capability COMMAND=ITEM` flags,
+  and optionally `--check-return-terrain`. Python callers can inject
+  `src.decision.configured_decision_engine(...)` using the existing decision
+  callable contract.
+
+Terrain names and command equipment requirements are open for sponsor review.
+See [role eligibility](roles.md) for commander-specific configuration.
 
 ## HOLD
 
 | Given | When | Then response | Then state |
 | --- | --- | --- | --- |
 | Healthy, idle | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
-| Moving (`movement_flag` = true) | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
+| Moving with no active command | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
 | `current_command` set (busy) | `HOLD` | `DECLINE` `BUSY` | unchanged |
-| `role_epoch` of message < current | `HOLD` | `DECLINE` `STALE_EPOCH` | unchanged |
+| `role_epoch` of message < current | `HOLD` | `ERROR` `STALE_EPOCH` | unchanged |
 
 (`HOLD` is a stop command: it does not require movement, so battery/terrain do
 not block it.)
@@ -33,7 +63,7 @@ not block it.)
 | `terrain` in the agent's configured unsuitable-terrain set (exact match) | same | `DECLINE` `TERRAIN_UNSUITABLE` | unchanged |
 | command's configured required-capability set not a subset of `capabilities` (exact match, all required) | same | `DECLINE` `CAPABILITY_UNAVAILABLE` | unchanged |
 | `current_command` set (busy) | same | `DECLINE` `BUSY` | unchanged |
-| payload missing `waypoint` | same | `DECLINE` `INVALID_REQUEST` (or protocol `ERROR` if caught at validation) | unchanged |
+| payload missing `waypoint` | same | `ERROR` `MISSING_FIELD` | unchanged |
 
 ## RETURN
 
@@ -53,15 +83,15 @@ obstacle and terrain do not, since returning to base is the safe fallback —
 | Given | When | Then response | Then state |
 | --- | --- | --- | --- |
 | Any state | `REPORT_STATUS` | `STATUS_RESPONSE` with the current `state` snapshot | unchanged |
-| `role_epoch` of message < current | `REPORT_STATUS` | `DECLINE` `STALE_EPOCH` | unchanged |
+| `role_epoch` of message < current | `REPORT_STATUS` | `ERROR` `STALE_EPOCH` | unchanged |
 
 (`REPORT_STATUS` is always answerable from any healthy or degraded state; it
 never changes state.)
 
 ## Cross-cutting rules
 
-- A message whose `role_epoch` is **older** than the follower's current epoch is
-  declined `STALE_EPOCH` regardless of command.
+- After validation and authorization, the Follower rejects commands with an
+  older `role_epoch` using `ERROR` with code `STALE_EPOCH`.
 - A malformed or unauthorized message produces a protocol `ERROR`, not a
   `DECLINE` — see [protocol-errors.md](protocol-errors.md).
 - Comply state changes are deterministic: the same (command, state) always

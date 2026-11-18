@@ -1,6 +1,7 @@
 """Tests for receiving and responding to FALCON command messages."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -8,7 +9,7 @@ from jsonschema import Draft202012Validator
 import pytest
 
 from src.agents import Follower, InvalidFollowerMessageError
-from src.decision import DecisionResult, DeclineReason
+from src.decision import DecisionResult, DeclineReason, configured_decision_engine
 from src.state import CommandLifecycle, FollowerState
 from src.transport import InMemoryTransport
 
@@ -272,6 +273,162 @@ def test_non_command_message_is_ignored(connected_pair):
     commander.send(heartbeat)
 
     assert follower.handle_once(timeout=0) is None
+
+
+def test_busy_hold_declines_with_real_policy_and_preserves_state(connected_pair):
+    commander, link = connected_pair
+    state = FollowerState(
+        parent_id="commander-1", current_command="RETURN", movement_flag=True
+    )
+    follower = Follower(agent_id="follower-1", transport=link, state=state)
+    commander.send(command_envelope("HOLD"))
+
+    follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert response["payload"] == {
+        "response": "DECLINE",
+        "reason": "BUSY",
+        "in_reply_to": "command-1",
+    }
+    assert follower.state == FollowerState(
+        parent_id="commander-1", current_command="RETURN", movement_flag=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "payload", "epoch", "overrides", "outcome", "reason"),
+    [
+        ("FLY", {}, 1, {}, "ERROR", "UNSUPPORTED_COMMAND"),
+        ("PROCEED_TO_WAYPOINT", {}, 2, {}, "ERROR", "MISSING_FIELD"),
+        ("PROCEED_TO_WAYPOINT", {"waypoint": "ridge"}, 1, {}, "ERROR", "STALE_EPOCH"),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {},
+            "DECLINE",
+            "BATTERY_CRITICAL",
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {"battery_percent": 20},
+            "DECLINE",
+            "MECHANICAL_FAULT",
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {"battery_percent": 20, "mechanical_fault": False},
+            "DECLINE",
+            "OBSTACLE_DETECTED",
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {
+                "battery_percent": 20,
+                "mechanical_fault": False,
+                "obstacle_detected": False,
+            },
+            "DECLINE",
+            "TERRAIN_UNSUITABLE",
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {
+                "battery_percent": 20,
+                "mechanical_fault": False,
+                "obstacle_detected": False,
+                "terrain": "available",
+            },
+            "DECLINE",
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {
+                "battery_percent": 20,
+                "mechanical_fault": False,
+                "obstacle_detected": False,
+                "terrain": "available",
+                "capabilities": ["fixture-item"],
+            },
+            "DECLINE",
+            "BUSY",
+        ),
+        ("REPORT_STATUS", {}, 2, {}, "STATUS_RESPONSE", None),
+        (
+            "PROCEED_TO_WAYPOINT",
+            {"waypoint": "ridge"},
+            2,
+            {
+                "battery_percent": 20,
+                "mechanical_fault": False,
+                "obstacle_detected": False,
+                "terrain": "available",
+                "capabilities": ["fixture-item"],
+                "current_command": None,
+            },
+            "COMPLY",
+            None,
+        ),
+    ],
+)
+def test_real_follower_guard_precedence(
+    connected_pair, command, payload, epoch, overrides, outcome, reason
+):
+    commander, link = connected_pair
+    state = FollowerState(
+        parent_id="commander-1",
+        role_epoch=2,
+        **{
+            "battery_percent": 19,
+            "mechanical_fault": True,
+            "obstacle_detected": True,
+            "terrain": "blocked",
+            "current_command": "RETURN",
+            "movement_flag": True,
+            "position": "east-ridge",
+            **overrides,
+        },
+    )
+    before = deepcopy(state)
+    policy = configured_decision_engine(
+        unsuitable_terrain={"blocked"},
+        required_capabilities={"PROCEED_TO_WAYPOINT": {"fixture-item"}},
+    )
+    follower = Follower(
+        agent_id="follower-1", transport=link, state=state, decision_engine=policy
+    )
+    commander.send(command_envelope(command, payload, role_epoch=epoch))
+
+    result = follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+    assert validate(response)[0]
+    assert response["payload"]["in_reply_to"] == "command-1"
+    assert response["payload"]["response"] == outcome
+    if outcome == "ERROR":
+        assert response["payload"]["error"]["code"] == reason
+        assert result.decision is None
+    elif outcome == "DECLINE":
+        assert response["payload"]["reason"] == reason
+        assert result.decision == DecisionResult(False, DeclineReason(reason))
+    elif outcome == "STATUS_RESPONSE":
+        assert response["payload"]["state"] == follower.status_snapshot()
+    else:
+        assert result.decision == DecisionResult(True)
+        before.position = "ridge"
+        before.current_command = "PROCEED_TO_WAYPOINT"
+    assert follower.state == before
 
 
 def test_default_validator_uses_falcon_019_module(connected_pair):

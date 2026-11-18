@@ -52,7 +52,6 @@ def tcp_link():
 def moving(**overrides):
     return FollowerState(
         movement_flag=True,
-        current_command="RETURN",
         position="north-fence",
         **overrides,
     )

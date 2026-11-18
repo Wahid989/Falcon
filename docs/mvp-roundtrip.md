@@ -69,9 +69,10 @@ low battery. Decline leaves state unchanged.
 
 The FALCON-031 `src.decision.decide` implementation applies this battery rule
 to `PROCEED_TO_WAYPOINT` and `RETURN` below 20%. `HOLD` and `REPORT_STATUS`
-remain available at low battery. This is the MVP decision slice, not the full
-Phase-4 policy for terrain, capability, mechanical fault, stale authority, or
-availability.
+are exempt from the battery guard. The policy also checks mechanical fault,
+obstacles, and busy state in the selected order. See
+[acceptance-criteria.md](acceptance-criteria.md) for the guard order and command
+exceptions.
 
 ```json
 {
@@ -89,6 +90,55 @@ availability.
     "reason": "BATTERY_CRITICAL"
   }
 }
+```
+
+## Decision interface (FALCON-032)
+
+`src.decision` exports the MVP policy with this signature:
+
+```python
+def decide(
+    state: FollowerState,
+    command: str,
+    payload: Mapping[str, object],
+    message_role_epoch: int,
+) -> DecisionResult:
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `state` | The follower's current simulated state, including `battery_percent`. |
+| `command` | The command name from the message payload, such as `RETURN`. |
+| `payload` | Command-specific fields after the Follower extracts `command`. For example, `PROCEED_TO_WAYPOINT` carries `{"waypoint": "north-fence"}` and `RETURN` uses `{}`. |
+| `message_role_epoch` | The epoch from the incoming message envelope. The function requires an integer and currently leaves it unused when deciding the outcome. |
+
+`DecisionResult.complied` is `True` when the policy accepts the command and
+`False` when it declines. `DecisionResult.reason` is `None` for acceptance
+and a `DeclineReason` enum member for a decline.
+
+Call `decide()` directly without a transport. It performs no I/O, uses no
+randomness, and leaves its inputs unchanged. The Follower validates the
+message and checks sender authority and epoch before calling the policy.
+It applies state transitions and constructs the protocol response from the
+decision afterward.
+
+Run this example from the repository root with the project dependencies
+installed:
+
+```python
+from copy import deepcopy
+
+from src.decision import DecisionResult, DeclineReason, decide
+from src.state import FollowerState
+
+state = FollowerState(battery_percent=5, position="north-fence")
+before = deepcopy(state)
+
+result = decide(state, "RETURN", {}, message_role_epoch=0)
+
+assert result == DecisionResult(False, DeclineReason.BATTERY_CRITICAL)
+assert state == before
+print(result.complied, result.reason.value)  # False BATTERY_CRITICAL
 ```
 
 ## Broadcast

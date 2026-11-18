@@ -9,6 +9,7 @@ import signal
 import sys
 
 from src.agents.tcp_runtime import FollowerTCPServer
+from src.decision import configured_decision_engine, decide
 from src.logging.exchange import ExchangeLogger, ExchangeLogError
 from src.state import FollowerState, load_scenario
 from src.transport import TransportError
@@ -31,6 +32,11 @@ def main(argv=None):
         metavar="MODULE:CALLABLE",
     )
     parser.add_argument("--max-commands", type=int)
+    parser.add_argument("--unsuitable-terrain", action="append", default=[])
+    parser.add_argument("--check-return-terrain", action="store_true")
+    parser.add_argument(
+        "--require-capability", action="append", default=[], metavar="COMMAND=ITEM"
+    )
     parser.add_argument(
         "--pretty",
         action="store_true",
@@ -52,6 +58,26 @@ def main(argv=None):
         if not separator or not module or not name:
             raise ValueError("Decision engine must be MODULE:CALLABLE")
         policy = getattr(importlib.import_module(module), name)
+        if (
+            args.unsuitable_terrain
+            or args.check_return_terrain
+            or args.require_capability
+        ):
+            if policy is not decide:
+                raise ValueError(
+                    "Suitability flags require the built-in decision policy"
+                )
+            requirements = {}
+            for entry in args.require_capability:
+                command, separator, capability = entry.partition("=")
+                if not separator or not command or not capability:
+                    raise ValueError("Required capability must be COMMAND=ITEM")
+                requirements.setdefault(command, []).append(capability)
+            policy = configured_decision_engine(
+                unsuitable_terrain=args.unsuitable_terrain,
+                check_return_terrain=args.check_return_terrain,
+                required_capabilities=requirements,
+            )
         state = load_scenario(args.state) if args.state else FollowerState()
         exchange_log = (
             ExchangeLogger(

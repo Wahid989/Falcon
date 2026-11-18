@@ -61,9 +61,8 @@ share one implementation of each check.
 each command's / the commander role's required capabilities are a team/sponsor
 decision, supplied as configuration — the contract here fixes only the rule.
 
-The decision priority order (which reason wins when several apply) is defined
-with the decision engine in Phase 4 (FALCON-037): command validity → battery →
-terrain → capability → availability.
+The [selected implementation policy](acceptance-criteria.md#selected-implementation-policy)
+defines which reason wins when several apply.
 
 ## Role management
 

@@ -24,12 +24,17 @@ UNFIT = {"battery_percent": 5, "current_command": None}
 check = basic_eligibility()
 
 
-def fleet(hierarchy=CHAIN, live=None, shared=None):
+def fleet(hierarchy=CHAIN, live=None, shared=None, eligibility=None):
     """A Role Manager per agent. ``live`` is each agent's real status now;
     ``shared`` is the status everyone last heard (from the heartbeat)."""
     live = live or {}
     managers = {
-        agent: RoleManager(agent, hierarchy, status=lambda a=agent: live.get(a, FIT))
+        agent: RoleManager(
+            agent,
+            hierarchy,
+            status=lambda a=agent: live.get(a, FIT),
+            eligibility=eligibility,
+        )
         for agent in hierarchy.agents
     }
     for manager in managers.values():
@@ -103,6 +108,22 @@ def test_choose_successor(statuses, excluded, expected):
     assert chosen == expected
 
 
+def test_succession_applies_configured_role_terrain_and_equipment():
+    eligibility = basic_eligibility(
+        unsuitable_terrain=("fixture",), required_capabilities=("item-a", "item-b")
+    )
+    statuses = {
+        "agent-a": {**FIT, "terrain": "fixture", "capabilities": ["item-a", "item-b"]},
+        "agent-b": {**FIT, "capabilities": ["item-a"]},
+        "agent-c": {**FIT, "capabilities": ["item-b", "item-a"]},
+    }
+
+    assert (
+        choose_successor(CHAIN, "ground", statuses=statuses, eligibility=eligibility)
+        == "agent-c"
+    )
+
+
 def test_successor_takes_the_failed_place_and_keeps_its_followers():
     after = CHAIN.after_failure("ground", "agent-a", role_epoch=1)
     assert after.top == "agent-a"
@@ -161,16 +182,34 @@ def test_lowest_id_fit_agent_promotes_and_peers_accept_it():
     assert record["previous_commander_id"] == "ground"
 
 
-def test_unfit_at_promotion_declines_and_the_next_takes_over():
-    # Everyone heard agent-a was fine, but its battery has just dropped.
-    managers = fleet(live={"agent-a": UNFIT})
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"battery_percent": 5}, "degraded"),
+        ({"mechanical_fault": True}, "degraded"),
+        ({"current_command": "RETURN"}, "busy"),
+        ({"terrain": "test-terrain"}, "terrain_unsuitable"),
+        ({"capabilities": []}, "equipment_missing"),
+    ],
+)
+def test_unfit_at_promotion_declines_and_the_next_takes_over(overrides, reason):
+    fit = {**FIT, "capabilities": ["item-a"]}
+    live = {agent: fit for agent in SURVIVORS}
+    live["agent-a"] = {**fit, **overrides}
+    managers = fleet(
+        live=live,
+        shared={agent: fit for agent in SURVIVORS},
+        eligibility=basic_eligibility(
+            required_capabilities=("item-a",), unsuitable_terrain=("test-terrain",)
+        ),
+    )
 
     announcements = lose(managers, "ground", SURVIVORS)
 
     assert announcements == []
     declined = [r for r in managers["agent-a"].records if r["outcome"]]
     assert declined[0]["outcome"] == "promotion_declined"
-    assert declined[0]["reason"] == "degraded"
+    assert declined[0]["reason"] == reason
     # The others wait for agent-a, time out, and move to agent-b.
     assert managers["agent-b"].expected_successor == "agent-a"
     for agent in ("agent-b", "agent-c", "agent-a1"):

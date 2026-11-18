@@ -25,7 +25,6 @@ def test_checkpoint_proves_round_trip_broadcast_decline_and_logs(tmp_path):
                     battery_percent=5 if low else 100,
                     position="north-fence",
                     movement_flag=not low,
-                    current_command=None if low else "RETURN",
                 )
                 logger = ExchangeLogger(
                     tmp_path,

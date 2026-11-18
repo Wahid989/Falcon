@@ -182,18 +182,19 @@ default. FALCON_LOG_ROOT selects the host bind directory (default `./logs`).
 
 ## Decision policy and scope
 
-Compose uses the team's `src.decision.engine:decide` MVP implementation. It
-complies with HOLD/REPORT_STATUS and declines movement when battery is below
-20%, without mutating state. The real Follower performs validation, authority
-checks and state transitions. The full Phase-4 terrain/capability/mechanical/
-availability policy remains separate from this MVP decision slice.
+Compose uses `src.decision.engine:decide`. The policy evaluates battery,
+mechanical fault, obstacles, and busy state without mutating state. The
+Follower performs validation, authority checks, and state transitions. See
+[the selected implementation policy](acceptance-criteria.md#selected-implementation-policy)
+for command exceptions and the planned terrain and capability guards.
 
 `--decision-engine MODULE:CALLABLE` can override the runner's default for explicit
 experiments. `scripts.tcp_agent_policy:decide` remains an optional older demo
 helper; it is not used by the Compose milestone gate.
 
-Normal followers start moving via `config/mvp/moving.yml` so HOLD has a visible
-effect. The low follower uses `config/mvp/low-battery.yml`, which sets battery to
+Normal followers start moving with no active command via
+`config/mvp/moving.yml` so HOLD can comply and visibly stop movement.
+The low follower uses `config/mvp/low-battery.yml`, which sets battery to
 5 and position to north-fence. The older `tests/scenarios/follower_low_battery.yml`
 sets 15%, so it is not used for this exact milestone requirement.
 
