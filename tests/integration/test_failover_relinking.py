@@ -8,6 +8,7 @@ the other drones, Ground commanding the successor, and Ground still the top.
 import json
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,24 @@ SPONSOR = Hierarchy(
     }
 )
 DRONES = ("drone-a", "drone-b", "drone-c")
+# The storage tests ingest a committed copy of a failover's logs.
+STORAGE_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "storage/dotnet/tests/FalconStorage.Tests/Fixtures/agent-logs/failover"
+)
+ROLE_KEYS = (
+    "logged_by",
+    "hierarchy_level",
+    "requester_id",
+    "target_commander_id",
+    "previous_commander_id",
+    "previous_role",
+    "new_role",
+    "old_epoch",
+    "new_epoch",
+    "outcome",
+    "reason",
+)
 FIT = {"battery_percent": 90, "current_command": None}
 INTERVAL = 0.05  # heartbeat interval; a loss is declared after 3 of them
 
@@ -51,7 +70,7 @@ def wait_for(condition, timeout=5.0):
 class Fleet:
     """Every agent of a hierarchy, in memory, with a switchboard for new links."""
 
-    def __init__(self, hierarchy, *, states=None, log_dir=None):
+    def __init__(self, hierarchy, *, states=None, log_dir=None, session_id="relink"):
         states = states or {}
         self.down: set[str] = set()
         self.agents: dict[str, DualRoleAgent] = {}
@@ -76,7 +95,9 @@ class Fleet:
                 heartbeat_status=(lambda: dict(FIT)) if parent is None else None,
                 connector=self._connector(agent),
                 exchange_log=(
-                    exchange_logger_for(hierarchy, agent, log_dir, session_id="relink")
+                    exchange_logger_for(
+                        hierarchy, agent, log_dir, session_id=session_id
+                    )
                     if log_dir
                     else None
                 ),
@@ -226,6 +247,51 @@ def test_a_successor_that_never_announces_is_passed_over():
         assert fleet.roles("drone-c").role_epoch == 1
         result = fleet.agents["ground"].commander.issue("drone-b", "HOLD", timeout=3)
         assert result.outcome is Outcome.COMPLY
+
+
+def run_failover(log_dir, session_id="relink"):
+    """drone-cmd dies, drone-a takes over, and Ground orders a HOLD through it.
+
+    Every agent logs to ``log_dir``. Used to make the storage fixture.
+    """
+    with Fleet(SPONSOR, log_dir=log_dir, session_id=session_id) as fleet:
+        assert wait_for(lambda: statuses_shared(fleet))
+        fleet.kill("drone-cmd")
+        assert wait_for(lambda: commanded_by(fleet, "drone-a", ("drone-b", "drone-c")))
+        result = fleet.agents["ground"].commander.issue("drone-a", "HOLD", timeout=3)
+        assert result.outcome is Outcome.COMPLY
+
+
+def role_records(log_dir):
+    """Each agent's role-change records, as {agent: [record, ...]}."""
+    found = {}
+    for path in sorted(Path(log_dir).glob("*.jsonl")):
+        records = [
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        ]
+        changes = [r for r in records if r["record_type"] == "role_change"]
+        if changes:
+            found[path.stem] = changes
+    return found
+
+
+def test_failover_role_records_match_the_storage_fixture(tmp_path):
+    # Each side of a failover logs its own role record: the successor that
+    # promoted itself, and the commander above that accepted it. Storage must
+    # know every outcome the agents write; if the records change, this fails
+    # until the fixture is made again with run_failover.
+    run_failover(tmp_path)
+    live = role_records(tmp_path)
+    fixture = role_records(STORAGE_FIXTURE)
+
+    assert sorted(live) == sorted(fixture) == ["drone-a", "ground"]
+    for agent, records in live.items():
+        assert len(records) == len(fixture[agent])
+        for fresh, fixed in zip(records, fixture[agent]):
+            assert set(fresh) == set(fixed)
+            assert {k: fresh[k] for k in ROLE_KEYS} == {k: fixed[k] for k in ROLE_KEYS}
+    assert [r["outcome"] for r in live["drone-a"]] == ["self_promoted"]
+    assert [r["outcome"] for r in live["ground"]] == ["successor_accepted"]
 
 
 @pytest.mark.parametrize("depth", [4])

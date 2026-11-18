@@ -17,11 +17,12 @@ internal static class LogRecordParser
     private static readonly HashSet<string> RoleOutcomes = new(StringComparer.Ordinal)
     {
         "GRANTED", "DENIED", "SELF_PROMOTED", "STEPPED_DOWN", "PROMOTION_DECLINED", "VACANT",
+        "SUCCESSOR_ACCEPTED",
     };
 
     private static readonly HashSet<string> EpochAdvancingOutcomes = new(StringComparer.Ordinal)
     {
-        "GRANTED", "SELF_PROMOTED", "STEPPED_DOWN",
+        "GRANTED", "SELF_PROMOTED", "STEPPED_DOWN", "SUCCESSOR_ACCEPTED",
     };
 
     private static readonly HashSet<string> ReasonRequiredOutcomes = new(StringComparer.Ordinal)

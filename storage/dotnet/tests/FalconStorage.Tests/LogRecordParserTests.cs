@@ -126,6 +126,7 @@ public class LogRecordParserTests
     [InlineData("stepped_down", 1, 3, "STALE_EPOCH")]
     [InlineData("promotion_declined", 3, null, "BATTERY_CRITICAL")]
     [InlineData("vacant", 3, null, null)]
+    [InlineData("successor_accepted", 0, 1, null)]
     public void AcceptsEveryValidRoleOutcome(string outcome, int oldEpoch, int? newEpoch, string? reason)
     {
         var result = LogRecordParser.Parse(LogLines.RoleChange(Session, outcome, oldEpoch, newEpoch, reason));
@@ -201,6 +202,7 @@ public class LogRecordParserTests
     [InlineData("vacant", 1, 2, null, "must not change")]
     [InlineData("denied", 1, null, null, "requires a 'reason'")]
     [InlineData("promotion_declined", 1, null, null, "requires a 'reason'")]
+    [InlineData("successor_accepted", 1, 1, null, "new_epoch greater")]
     [InlineData("voted", 1, 2, null, "unknown outcome")]
     public void RejectsRoleChangesThatBreakEpochRules(
         string outcome, int oldEpoch, int? newEpoch, string? reason, string expected)
