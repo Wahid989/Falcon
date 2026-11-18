@@ -153,13 +153,16 @@ def statuses_shared(fleet):
 
 
 def commanded_by(fleet, successor, followers):
-    # RoleManager changes before the reader finishes installing module links.
-    # Wait for the usable route, not just the new hierarchy snapshot.
+    """The new chain is in place, in the Role Managers and in the running agents."""
+    ground = fleet.agents["ground"]
     return (
         fleet.roles("ground").followers() == (successor,)
-        and successor in fleet.agents["ground"].commander.followers
-        and set(followers) <= set(fleet.agents[successor].commander.followers)
-        and all(fleet.roles(f).get_current_commander() == successor for f in followers)
+        and ground.commander.followers == [successor]
+        and all(
+            fleet.roles(f).get_current_commander() == successor
+            and fleet.agents[f].hierarchy.parent_of(f) == successor
+            for f in followers
+        )
     )
 
 
@@ -232,7 +235,10 @@ def test_failover_in_the_middle_of_a_deep_chain_keeps_the_top(depth):
     with Fleet(chain) as fleet:
         fleet.kill(ids[1])
 
-        assert wait_for(lambda: fleet.roles(ids[0]).followers() == (ids[2],))
+        assert wait_for(
+            lambda: fleet.agents[ids[0]].commander.followers == [ids[2]]
+            and fleet.agents[ids[3]].hierarchy.parent_of(ids[3]) == ids[2]
+        )
         assert fleet.roles(ids[0]).role is Role.COMMANDER
         assert fleet.roles(ids[3]).get_current_commander() == ids[2]
         result = fleet.agents[ids[0]].commander.issue(ids[2], "HOLD", timeout=3)
