@@ -412,5 +412,5 @@ def test_role_change_records_use_the_log_format():
         assert record["target_commander_id"] == "ground"
         assert record["previous_commander_id"] == "ground"
         assert (record["old_epoch"], record["new_epoch"]) == (0, 1)
-        assert record["new_role"] == "COMMANDER"
+        assert record["new_role"] == "commander"
         assert isinstance(record["hierarchy_level"], int)

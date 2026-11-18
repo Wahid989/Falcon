@@ -15,12 +15,19 @@ link that claims to come from a follower is rejected the same way.
 The runtime owns the real links (one per peer) and hands them in. Each module
 reads from a ``PeerLink``, a view of one real link that only receives what the
 router gives it.
+
+When authority changes (a grant or a failover), the Role Manager's view of the
+chain changes and the agent follows it: it opens links to new peers through
+the runtime's ``connector``, takes the links new peers open to it
+(``accept_link``), and points its Commander and Follower modules at the right
+peers.
 """
 
 from __future__ import annotations
 
 import queue
 import threading
+import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -167,6 +174,7 @@ class DualRoleAgent:
         heartbeat_interval: float | None = None,
         heartbeat_misses: int = 3,
         heartbeat_status: Callable[[], Mapping[str, object]] | None = None,
+        connector: Callable[[str], Transport] | None = None,
     ) -> None:
         follower_links = dict(follower_links or {})
         parent_id = hierarchy.parent_of(agent_id)
@@ -195,6 +203,12 @@ class DualRoleAgent:
         self.roles = roles
         self._roles_lock = threading.Lock()
         self.relaying: RelayingDecision | None = None
+        self._connector = connector
+        # A commander declared lost: its old link is never handed to a module
+        # again; only a fresh link (when it comes back) is.
+        self._lost_peer: str | None = None
+        # (expected successor, when this agent started waiting for it)
+        self._awaiting: tuple[str, float] | None = None
 
         self._links: dict[str, Transport] = dict(follower_links)
         self._views: dict[str, PeerLink] = {
@@ -222,7 +236,7 @@ class DualRoleAgent:
             state.hierarchy_level = hierarchy.level_of(agent_id)
             state.role_epoch = max(state.role_epoch, hierarchy.role_epoch)
             engine = decision_engine if decision_engine is not None else decide
-            if relay_timeout is not None and followers:
+            if relay_timeout is not None:
                 self.relaying = RelayingDecision(
                     self.commander,
                     timeout=relay_timeout,
@@ -263,6 +277,24 @@ class DualRoleAgent:
 
     # --- routing -------------------------------------------------------------
 
+    def _claims_newer_authority(self, message: Message, arrived_from: str) -> bool:
+        """A message from outside the agent's current view, carrying a newer epoch.
+
+        After a failover the new commander, or a successor reporting upward,
+        is not a direct peer yet; the Role Manager decides whether to accept it.
+        """
+        if self.roles is None or not isinstance(message, dict):
+            return False
+        epoch = message.get("role_epoch")
+        sender = message.get("sender_id")
+        return (
+            sender == arrived_from
+            and message.get("type") in ("heartbeat", "command")
+            and type(epoch) is int
+            and epoch > self.roles.role_epoch
+            and sender in self.roles.hierarchy
+        )
+
     def route(self, message: Message, arrived_from: str) -> str | None:
         """Which module handles ``message``: ``"follower"``, ``"commander"`` or None.
 
@@ -286,6 +318,11 @@ class DualRoleAgent:
         both modules before they handle the message.
         """
         target = self.route(message, arrived_from)
+        if target is None and self._claims_newer_authority(message, arrived_from):
+            with self._roles_lock:
+                if self._validate(message)[0]:
+                    self._observe(message)
+            target = self.route(message, arrived_from)
         if target is None:
             self._reject(message, arrived_from)
             return None
@@ -296,15 +333,14 @@ class DualRoleAgent:
                         self._heartbeat.received(message, arrived_from)
                     replies = self.roles.handle(message)
                     self._sync_epoch()
-                    self._send_all(replies)
+                    self._send_all(self._after_change(replies))
                     return "roles"
                 if (
                     message.get("type") == "heartbeat"
                     and not self._validate(message)[0]
                 ):
                     return None
-                accepted = self.roles.observe(message)
-                self._sync_epoch()
+                accepted = self._observe(message)
                 if self._heartbeat is not None:
                     observed = accepted and self._heartbeat.received(
                         message, arrived_from
@@ -357,9 +393,28 @@ class DualRoleAgent:
             raise DualRoleError(f"{self.agent_id} has no link to {peer_id!r}")
         self._links[peer_id] = link
         self._views[peer_id].reopen(link)
+        if peer_id == self._lost_peer:
+            self._lost_peer = None
+        self._attach(peer_id)
         old = self._readers.pop(peer_id, None)
         if old is not None:
             old.join(POLL_SECONDS * 4)
+        if self._started and not self._stop.is_set():
+            self._start_reader(peer_id, link)
+
+    def accept_link(self, peer_id: str, link: Transport) -> None:
+        """Take a link that a peer opened to this agent.
+
+        For example the new commander after a failover, or a successor that
+        now reports to this agent. Messages on it are routed like any other;
+        until the Role Manager accepts the peer, they are rejected.
+        """
+        if peer_id in self._links:
+            self.replace_link(peer_id, link)
+            return
+        self._links[peer_id] = link
+        self._views[peer_id] = PeerLink(peer_id, link, self._note_sent)
+        self._attach(peer_id)
         if self._started and not self._stop.is_set():
             self._start_reader(peer_id, link)
 
@@ -410,6 +465,7 @@ class DualRoleAgent:
             self._heartbeat.sent(peer)
 
     def _hold_on_loss(self) -> None:
+        self._lost_peer = self.hierarchy.parent_of(self.agent_id)
         if self.follower is not None:
             self.follower.state.movement_flag = False
             self.follower.state.current_command = None
@@ -418,9 +474,28 @@ class DualRoleAgent:
         """Run the heartbeat/failover callbacks under the RoleManager lock."""
         if self._heartbeat is not None:
             with self._roles_lock:
-                messages = self._heartbeat.poll()
+                messages = self._heartbeat.poll() + self._check_successor()
                 self._sync_epoch()
-                self._send_all(messages)
+                self._send_all(self._after_change(messages))
+
+    def _check_successor(self) -> list[Message]:
+        """Move on if the expected successor doesn't announce itself in time.
+
+        It gets the same window as a lost commander (interval x misses).
+        """
+        awaited = self.roles.awaited_successor
+        now = time.monotonic()
+        if awaited is None:
+            self._awaiting = None
+            return []
+        if self._awaiting is None or self._awaiting[0] != awaited:
+            self._awaiting = (awaited, now)
+            return []
+        window = self._heartbeat.interval * self._heartbeat.missed_intervals
+        if now - self._awaiting[1] < window:
+            return []
+        self._awaiting = None
+        return self.roles.candidate_timed_out()
 
     def _heartbeat_loop(self) -> None:
         period = min(POLL_SECONDS, self._heartbeat.interval / 4)
@@ -456,6 +531,100 @@ class DualRoleAgent:
         self._views[parent].send(reply)
         if self._exchange_log is not None:
             self._exchange_log.record("sent", reply)
+
+    def _observe(self, message: Message) -> bool:
+        """Show a message to the Role Manager and follow any change it makes.
+
+        A newer epoch reported from below is passed on up straight away, so
+        the agents above don't treat their next order as stale.
+        """
+        before = self.roles.role_epoch
+        accepted = self.roles.observe(message)
+        self._sync_epoch()
+        outgoing = self._after_change([])
+        if (
+            accepted
+            and self.roles.role_epoch > before
+            and message.get("sender_role") == "follower"
+        ):
+            outgoing = _add_once(outgoing, self._status_report())
+        self._send_all(outgoing)
+        return accepted
+
+    def _after_change(self, messages: list[Message]) -> list[Message]:
+        """Follow the Role Manager's view, then send ``messages`` first.
+
+        A report to a new parent goes last, and only if nothing else is
+        already going to it.
+        """
+        outgoing = list(messages)
+        for report in self._reshape():
+            outgoing = _add_once(outgoing, report)
+        return outgoing
+
+    def _status_report(self) -> Message | None:
+        if self.follower is None:
+            return self.roles.status_report()
+        status = self.follower.status_snapshot()
+        return self.roles.status_report(status)
+
+    def _reshape(self) -> list[Message]:
+        """Follow the Role Manager's view of the chain after it changed.
+
+        Opens links to new peers (through the connector), moves the Commander
+        and Follower modules to the right peers, and updates the log levels.
+        Returns the upward report a new parent should get.
+        """
+        if self.roles is None or self.roles.hierarchy is self.hierarchy:
+            return []
+        old, new = self.hierarchy, self.roles.hierarchy
+        self.hierarchy = new
+        old_parent = old.parent_of(self.agent_id)
+        new_parent = new.parent_of(self.agent_id)
+        followers = new.children_of(self.agent_id)
+        if new_parent == old_parent and set(followers) == set(
+            old.children_of(self.agent_id)
+        ):
+            return []
+        for peer in (*followers, new_parent):
+            if peer is None or peer in self._links or self._connector is None:
+                continue
+            try:
+                link = self._connector(peer)
+            except (TransportError, OSError):
+                continue  # unreachable for now (for example the failed agent)
+            self._links[peer] = link
+            self._views[peer] = PeerLink(peer, link, self._note_sent)
+            if self._started and not self._stop.is_set():
+                self._start_reader(peer, link)
+        for follower_id in self.commander.followers:
+            if follower_id not in followers:
+                self.commander.remove_follower(follower_id)
+        for peer in self._views:
+            self._attach(peer)
+        if self.follower is not None:
+            state = self.follower.state
+            state.parent_id = new_parent
+            state.follower_ids = list(followers)
+            state.hierarchy_level = new.level_of(self.agent_id)
+        if self._exchange_log is not None:
+            self._exchange_log.level = new.level_of(self.agent_id)
+            self._exchange_log.peer_levels = new.peer_levels(self.agent_id)
+        if new_parent is not None and new_parent != old_parent:
+            report = self._status_report()
+            if report is not None:
+                return [report]
+        return []
+
+    def _attach(self, peer: str) -> None:
+        """Give the link to ``peer`` to the module that should use it now."""
+        if peer == self._lost_peer:
+            return
+        relation = self.hierarchy.relation(self.agent_id, peer)
+        if relation == "follower" and peer not in self.commander.followers:
+            self.commander.add_follower(peer, self._views[peer])
+        elif relation == "parent" and self.follower is not None:
+            self.follower.transport = self._views[peer]
 
     def _sync_epoch(self) -> None:
         """Stamp the Role Manager's epoch on both modules."""
@@ -546,3 +715,12 @@ class DualRoleAgent:
         }
         ok, _ = self._validate(reply)
         return reply if ok else None
+
+
+def _add_once(messages: list[Message], extra: Message | None) -> list[Message]:
+    """``messages`` plus ``extra``, unless its recipient already gets one."""
+    if extra is None or any(
+        m.get("recipient_id") == extra["recipient_id"] for m in messages
+    ):
+        return messages
+    return [*messages, extra]
