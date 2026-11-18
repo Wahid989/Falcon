@@ -93,6 +93,7 @@ and documented here:
 
 - [`docs/mvp-running.md`](docs/mvp-running.md) — Docker milestone, JSONL evidence, CI and go/no-go checks
 - [`docs/heartbeat.md`](docs/heartbeat.md) — opt-in heartbeat timing and RoleManager status/loss callbacks
+- [`docs/logging.md`](docs/logging.md) — buffered rotation, dynamic hierarchy levels, role/event records
 - [`docs/transport.md`](docs/transport.md) — transport API, in-memory pairs, TCP demo, recovery, and agent handoff
 - [`docs/commander.md`](docs/commander.md) — Commander module: building, sending and correlating commands
 - [`docs/hierarchy-runtime.md`](docs/hierarchy-runtime.md) — command chain model and dual-role (middle) agents

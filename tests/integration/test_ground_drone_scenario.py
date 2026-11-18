@@ -233,10 +233,17 @@ def test_a_silent_drone_is_reported_as_no_response(sponsor, tmp_path):
     errors = [
         r["message"]["payload"]
         for r in sent
-        if r["direction"] == "sent"
+        if r["record_type"] == "message"
+        and r["direction"] == "sent"
         and r["message"]["payload"].get("response") == "ERROR"
     ]
     assert errors[0]["error"]["agent"] == "drone-c"
+    assert any(
+        r["record_type"] == "event"
+        and r["event_type"] == "RESPONSE_TIMEOUT"
+        and r["detail"]["peer_id"] == "drone-c"
+        for r in sent
+    )
 
 
 def test_deep_silence_names_the_agent_that_went_silent():

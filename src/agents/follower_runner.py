@@ -43,6 +43,7 @@ def main(argv=None):
         text = json.dumps(record, indent=2 if args.pretty else None)
         print(f"\n{text}\n" if args.pretty else text, flush=True)
 
+    exchange_log = None
     server = None
     previous_handlers = {}
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -102,6 +103,8 @@ def main(argv=None):
     finally:
         if server is not None:
             server.close()
+        if exchange_log is not None:
+            exchange_log.close()
         for number, handler in previous_handlers.items():
             signal.signal(number, handler)
 

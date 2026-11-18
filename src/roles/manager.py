@@ -138,6 +138,7 @@ class RoleManager:
         self._eligibility = eligibility or basic_eligibility()
         self._status = status or (lambda: {})
         self._on_record = on_record
+        self._record_sinks: list[RecordSink] = []
         self._session_id = session_id
         self._clock = clock or _utc_now
         self._pending: PendingRequest | None = None
@@ -187,6 +188,18 @@ class RoleManager:
         if commander is not None:
             peers[commander] = Role.COMMANDER.value
         return peers
+
+    def add_record_sink(self, sink: RecordSink) -> None:
+        """Attach a runtime persistence sink without replacing existing observers."""
+        if not callable(sink):
+            raise TypeError("Record sink must be callable")
+        if sink != self._on_record and sink not in self._record_sinks:
+            self._record_sinks.append(sink)
+
+    def remove_record_sink(self, sink: RecordSink) -> None:
+        """Detach a runtime-owned sink when that runtime stops."""
+        if sink in self._record_sinks:
+            self._record_sinks.remove(sink)
 
     def observe_status(self, agent_id: str, status: Mapping[str, object]) -> None:
         """Remember an agent's latest shared status, used to check eligibility.
@@ -672,6 +685,8 @@ class RoleManager:
         self.records.append(record)
         if self._on_record is not None:
             self._on_record(record)
+        for sink in tuple(self._record_sinks):
+            sink(record)
 
 
 def _parents(hierarchy: Hierarchy) -> dict[str, str | None]:

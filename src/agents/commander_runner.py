@@ -299,6 +299,8 @@ def run(
     finally:
         for link in links:
             link.close()
+        if exchange_log is not None:
+            exchange_log.close()
 
     order = {f.follower_id: i for i, f in enumerate(followers)}
     records.sort(key=lambda record: order[record["follower"]])
@@ -346,6 +348,7 @@ def run_interactive(args, followers, *, out, source=None):
     def report(record):
         _print_record(record, out=out, pretty=args.pretty)
 
+    exchange_log = _exchange_logger(args, followers)
     session = CommanderSession(
         args.agent_id,
         address.follower_id,
@@ -358,7 +361,7 @@ def run_interactive(args, followers, *, out, source=None):
         initial_backoff=args.initial_backoff,
         max_backoff=args.max_backoff,
         report=report,
-        exchange_log=_exchange_logger(args, followers),
+        exchange_log=exchange_log,
     )
     try:
         session.connect()
@@ -417,6 +420,8 @@ def run_interactive(args, followers, *, out, source=None):
         return EXIT_OK
     finally:
         session.close()
+        if exchange_log is not None:
+            exchange_log.close()
 
 
 def main(
