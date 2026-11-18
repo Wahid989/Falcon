@@ -111,6 +111,8 @@ ingests, as `role_change` records:
 - `stepped_down`;
 - `successor_accepted` (by the commander above).
 
+All of them are stored in `RoleHandovers` (see [database.md](database.md)).
+
 Stale and out-of-turn rejections are `event` records.
 
 ## Code

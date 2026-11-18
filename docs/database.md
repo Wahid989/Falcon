@@ -48,6 +48,7 @@ an explicit, idempotent step. Scripts live in
 | `001_create_database.sql` | The database |
 | `002_create_exchange_schema.sql` | Exchange-record tables (FALCON-038) |
 | `003_create_ingestion_tables.sql` | Ingestion support tables (FALCON-042) |
+| `004_allow_successor_accepted.sql` | Adds the `SUCCESSOR_ACCEPTED` outcome to a database made before it existed (a fresh one gets it from 002) |
 
 The database name is the sqlcmd variable `$(FalconDb)`, so the same scripts can
 create a separate test database.
@@ -92,6 +93,15 @@ unrecognized sender. Every table that has it is indexed on it.
 | `STEPPED_DOWN` | revived commander rejoined as a follower | must increase (adopts the newer epoch) | optional |
 | `PROMOTION_DECLINED` | failover: survivor failed its live re-check | unchanged | required |
 | `VACANT` | failover: no fit agent, waiting for a human | unchanged | optional |
+| `SUCCESSOR_ACCEPTED` | failover below: a commander took the successor of its failed direct follower as its new direct follower | must increase | optional |
+
+A failover writes two rows, one per side: `SELF_PROMOTED` by the successor and
+`SUCCESSOR_ACCEPTED` by the commander above it. Every outcome the agents write
+must be listed in the ingester (`LogRecordParser.cs`) and in these checks, or
+its records become ingestion rejects. `tests/unit/test_storage_role_outcomes.py`
+checks the three lists stay in step, and the .NET test
+`BothSidesOfAFailoverReachRoleHandovers` loads a real failover's logs
+(`Fixtures/agent-logs/failover`).
 
 ### Ingestion support (`003_create_ingestion_tables.sql`)
 
