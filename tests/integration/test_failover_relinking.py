@@ -153,8 +153,13 @@ def statuses_shared(fleet):
 
 
 def commanded_by(fleet, successor, followers):
-    return fleet.roles("ground").followers() == (successor,) and all(
-        fleet.roles(f).get_current_commander() == successor for f in followers
+    # RoleManager changes before the reader finishes installing module links.
+    # Wait for the usable route, not just the new hierarchy snapshot.
+    return (
+        fleet.roles("ground").followers() == (successor,)
+        and successor in fleet.agents["ground"].commander.followers
+        and set(followers) <= set(fleet.agents[successor].commander.followers)
+        and all(fleet.roles(f).get_current_commander() == successor for f in followers)
     )
 
 
