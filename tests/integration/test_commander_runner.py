@@ -163,9 +163,7 @@ def run_cli(*args):
 
 
 def moving():
-    return FollowerState(
-        parent_id=COMMANDER_ID, movement_flag=True, current_command="RETURN"
-    )
+    return FollowerState(parent_id=COMMANDER_ID, movement_flag=True)
 
 
 def test_hold_round_trip_completes_within_timeout():

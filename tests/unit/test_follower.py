@@ -274,6 +274,27 @@ def test_non_command_message_is_ignored(connected_pair):
     assert follower.handle_once(timeout=0) is None
 
 
+def test_busy_hold_declines_with_real_policy_and_preserves_state(connected_pair):
+    commander, link = connected_pair
+    state = FollowerState(
+        parent_id="commander-1", current_command="RETURN", movement_flag=True
+    )
+    follower = Follower(agent_id="follower-1", transport=link, state=state)
+    commander.send(command_envelope("HOLD"))
+
+    follower.handle_once(timeout=0)
+    response = commander.receive(timeout=0)
+
+    assert response["payload"] == {
+        "response": "DECLINE",
+        "reason": "BUSY",
+        "in_reply_to": "command-1",
+    }
+    assert follower.state == FollowerState(
+        parent_id="commander-1", current_command="RETURN", movement_flag=True
+    )
+
+
 def test_default_validator_uses_falcon_019_module(connected_pair):
     _, link = connected_pair
 

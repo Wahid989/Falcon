@@ -129,8 +129,7 @@ TCP transport endpoints and a two-process smoke demo are available; see
 Actual Commander/Follower TCP sessions now support stateful commands,
 REPORT_STATUS-based registration, and bounded recovery after follower restart.
 See the [agent session commands](docs/transport.md#actual-agent-sessions-falcon-028029).
-Decision policy remains injectable; Compose uses the team's MVP battery policy.
+Decision policy remains injectable. Compose uses `src.decision.decide`.
 
-The Docker MVP acceptance gate now checks real agents and both-side JSONL logs;
-see [the run guide](docs/mvp-running.md). Its MVP battery policy is limited;
-full Phase-4 policy and later logging/role features remain separate work.
+The Docker MVP acceptance gate checks real agents and both-side JSONL logs.
+See [the run guide](docs/mvp-running.md) for the checkpoint and decision policy.

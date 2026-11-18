@@ -1,4 +1,4 @@
-"""Minimal deterministic command policy for the FALCON-031 MVP."""
+"""Deterministic command policy for the follower."""
 
 from typing import Mapping
 
@@ -15,11 +15,7 @@ def decide(
     payload: Mapping[str, object],
     message_role_epoch: int,
 ) -> DecisionResult:
-    """Decide the FALCON-031 battery rule without changing the state.
-
-    The full Phase-4 policy (including terrain, capability, and availability
-    checks) remains outside this minimal implementation.
-    """
+    """Evaluate the command without changing the state."""
     if not isinstance(state, FollowerState):
         raise TypeError("state must be a FollowerState")
     if not isinstance(command, str):
@@ -34,4 +30,13 @@ def decide(
         and state.battery_percent < BATTERY_MOVEMENT_THRESHOLD
     ):
         return DecisionResult(False, DeclineReason.BATTERY_CRITICAL)
+
+    if command in MOVEMENT_COMMANDS and state.mechanical_fault:
+        return DecisionResult(False, DeclineReason.MECHANICAL_FAULT)
+    if command == "PROCEED_TO_WAYPOINT" and state.obstacle_detected:
+        return DecisionResult(False, DeclineReason.OBSTACLE_DETECTED)
+    if state.current_command is not None and (
+        command == "HOLD" or command in MOVEMENT_COMMANDS
+    ):
+        return DecisionResult(False, DeclineReason.BUSY)
     return DecisionResult(True)

@@ -6,16 +6,26 @@ harness (Phase 9). State fields are defined in [state.md](state.md); reasons in
 [vocabulary.md](vocabulary.md).
 
 Notation: **Given** a follower state, **When** it receives a command, **Then**
-it returns a response and its state becomes as stated. The decision priority
-order is: command validity → stale epoch → battery → terrain → capability →
-availability.
+it returns a response and its state becomes as stated.
+
+## Selected implementation policy
+
+Command validity → battery → mechanical fault → obstacle → terrain →
+capability → busy → COMPLY. The first applicable guard determines the
+decline reason. The plan left the placement of the mechanical fault and
+obstacle guards unspecified. Their placement here is flagged for team review.
+
+The Follower validates commands and checks sender authority and epoch before
+invoking the policy. FALCON-033 implements the battery, mechanical fault,
+obstacle, and busy guards. Terrain and capability retain their positions in
+the selected order for FALCON-034 and FALCON-035.
 
 ## HOLD
 
 | Given | When | Then response | Then state |
 | --- | --- | --- | --- |
 | Healthy, idle | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
-| Moving (`movement_flag` = true) | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
+| Moving with no active command | `HOLD` | `COMPLY` | `movement_flag` = false, `current_command` = null |
 | `current_command` set (busy) | `HOLD` | `DECLINE` `BUSY` | unchanged |
 | `role_epoch` of message < current | `HOLD` | `DECLINE` `STALE_EPOCH` | unchanged |
 

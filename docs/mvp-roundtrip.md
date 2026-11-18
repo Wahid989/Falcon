@@ -69,9 +69,10 @@ low battery. Decline leaves state unchanged.
 
 The FALCON-031 `src.decision.decide` implementation applies this battery rule
 to `PROCEED_TO_WAYPOINT` and `RETURN` below 20%. `HOLD` and `REPORT_STATUS`
-remain available at low battery. This is the MVP decision slice, not the full
-Phase-4 policy for terrain, capability, mechanical fault, stale authority, or
-availability.
+are exempt from the battery guard. The policy also checks mechanical fault,
+obstacles, and busy state in the selected order. See
+[acceptance-criteria.md](acceptance-criteria.md) for the guard order and command
+exceptions.
 
 ```json
 {
