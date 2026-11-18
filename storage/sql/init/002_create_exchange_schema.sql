@@ -158,7 +158,10 @@ GO
 --   STEPPED_DOWN        a revived commander saw a higher epoch and rejoined as a follower
 --   PROMOTION_DECLINED  failover: the designated survivor failed its live re-check
 --   VACANT              failover: no surviving agent is fit; waiting for a human
--- Outcomes that change who is in charge (GRANTED, SELF_PROMOTED, STEPPED_DOWN)
+--   SUCCESSOR_ACCEPTED  failover below: a commander took the successor of its
+--                       failed direct follower as its new direct follower
+-- Outcomes that change who is in charge (GRANTED, SELF_PROMOTED, STEPPED_DOWN,
+-- SUCCESSOR_ACCEPTED)
 -- must move the epoch forward. The others leave it unchanged (NewEpoch null or
 -- equal to OldEpoch). DENIED and PROMOTION_DECLINED must say why.
 IF OBJECT_ID(N'dbo.RoleHandovers', N'U') IS NULL
@@ -186,10 +189,12 @@ BEGIN
             FOREIGN KEY (SessionId) REFERENCES dbo.Sessions (SessionId),
         CONSTRAINT CK_RoleHandovers_Outcome CHECK (Outcome IN (
             'GRANTED', 'DENIED', 'SELF_PROMOTED',
-            'STEPPED_DOWN', 'PROMOTION_DECLINED', 'VACANT')),
+            'STEPPED_DOWN', 'PROMOTION_DECLINED', 'VACANT',
+            'SUCCESSOR_ACCEPTED')),
         CONSTRAINT CK_RoleHandovers_OldEpoch CHECK (OldEpoch >= 0),
         CONSTRAINT CK_RoleHandovers_EpochChange CHECK (
-            (Outcome IN ('GRANTED', 'SELF_PROMOTED', 'STEPPED_DOWN')
+            (Outcome IN ('GRANTED', 'SELF_PROMOTED', 'STEPPED_DOWN',
+                         'SUCCESSOR_ACCEPTED')
                 AND NewEpoch IS NOT NULL AND NewEpoch > OldEpoch)
             OR (Outcome IN ('DENIED', 'PROMOTION_DECLINED', 'VACANT')
                 AND (NewEpoch IS NULL OR NewEpoch = OldEpoch))

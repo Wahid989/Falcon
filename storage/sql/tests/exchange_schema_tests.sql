@@ -108,9 +108,12 @@ VALUES
     (N'test-session', SYSUTCDATETIME(), N'fol-2', N'fol-2', 3, NULL, 'PROMOTION_DECLINED',
      'BATTERY_CRITICAL', 1, HASHBYTES('SHA2_256', 'line-9')),
     (N'test-session', SYSUTCDATETIME(), N'fol-3', N'fol-3', 3, 3, 'VACANT', NULL, 1,
-     HASHBYTES('SHA2_256', 'line-10'));
+     HASHBYTES('SHA2_256', 'line-10')),
+    -- A failover one level down: cmd-1 takes fol-4, the successor, directly.
+    (N'test-session', SYSUTCDATETIME(), N'cmd-1', N'fol-4', 3, 4, 'SUCCESSOR_ACCEPTED', NULL, 0,
+     HASHBYTES('SHA2_256', 'line-11'));
 
-IF (SELECT COUNT(*) FROM dbo.RoleHandovers WHERE SessionId = N'test-session') <> 6
+IF (SELECT COUNT(*) FROM dbo.RoleHandovers WHERE SessionId = N'test-session') <> 7
     THROW 50010, N'FAIL: valid role handover rows were not all stored', 1;
 
 IF (SELECT COUNT(*) FROM dbo.Messages WHERE SessionId = N'test-session') <> 3
@@ -173,6 +176,9 @@ INSERT INTO @Cases (Name, Sql) VALUES
     (N'vacancy that changes the epoch', @Role
         + N'(N''test-session'', SYSUTCDATETIME(), N''a'', N''a'', 3, 4, '
         + N'''VACANT'', NULL, HASHBYTES(''SHA2_256'', ''bad-14''))'),
+    (N'accepted successor that does not raise the epoch', @Role
+        + N'(N''test-session'', SYSUTCDATETIME(), N''a'', N''b'', 3, 3, '
+        + N'''SUCCESSOR_ACCEPTED'', NULL, HASHBYTES(''SHA2_256'', ''bad-15''))'),
     (N'session that ends before it starts',
         N'INSERT INTO dbo.Sessions (SessionId, StartedAt, EndedAt) VALUES (N''bad-session'', '
         + N'''2026-01-02'', ''2026-01-01'')');
