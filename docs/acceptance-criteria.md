@@ -16,9 +16,29 @@ decline reason. The plan left the placement of the mechanical fault and
 obstacle guards unspecified. Their placement here is flagged for team review.
 
 The Follower validates commands and checks sender authority and epoch before
-invoking the policy. FALCON-033 implements the battery, mechanical fault,
-obstacle, and busy guards. Terrain and capability retain their positions in
-the selected order for FALCON-034 and FALCON-035.
+invoking the policy. The terrain and capability guards use local configuration
+and default to empty restrictions.
+
+### Command suitability configuration
+
+- Terrain is blocked when the agent's current `terrain` exactly matches a
+  configured unsuitable value. The guard applies to `PROCEED_TO_WAYPOINT`.
+  `RETURN` uses it only when explicitly enabled. `HOLD` and `REPORT_STATUS`
+  skip the terrain guard. Unknown terrain strings pass the guard unless
+  explicitly configured as unsuitable. A scenario with no terrain override
+  uses the state model's default.
+- Every configured capability for a command must be present in the agent's
+  `capabilities`, with exact string matching. Requirements can be configured
+  for `PROCEED_TO_WAYPOINT`, `RETURN`, and `HOLD`. `REPORT_STATUS` remains
+  answerable regardless of equipment or other degraded state.
+- Configure each built-in Follower runner with repeatable
+  `--unsuitable-terrain VALUE` and `--require-capability COMMAND=ITEM` flags,
+  and optionally `--check-return-terrain`. Python callers can inject
+  `src.decision.configured_decision_engine(...)` using the existing decision
+  callable contract.
+
+Terrain names and command equipment requirements are open for sponsor review.
+See [role eligibility](roles.md) for commander-specific configuration.
 
 ## HOLD
 

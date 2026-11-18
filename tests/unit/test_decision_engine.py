@@ -4,7 +4,12 @@ import copy
 
 import pytest
 
-from src.decision import DecisionResult, DeclineReason, decide
+from src.decision import (
+    DecisionResult,
+    DeclineReason,
+    configured_decision_engine,
+    decide,
+)
 from src.state import FollowerState
 
 
@@ -138,3 +143,73 @@ def test_decision_rejects_non_state_and_non_mapping_inputs():
         decide(object(), "HOLD", {}, 0)
     with pytest.raises(TypeError, match="payload must be a mapping"):
         decide(FollowerState(), "HOLD", [], 0)
+
+
+@pytest.mark.parametrize(
+    ("command", "gate_return", "overrides", "reason"),
+    [
+        ("PROCEED_TO_WAYPOINT", False, {}, DeclineReason.TERRAIN_UNSUITABLE),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"terrain": ""},
+            DeclineReason.CAPABILITY_UNAVAILABLE,
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"terrain": "Fixture"},
+            DeclineReason.CAPABILITY_UNAVAILABLE,
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"obstacle_detected": True},
+            DeclineReason.OBSTACLE_DETECTED,
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"current_command": "RETURN"},
+            DeclineReason.TERRAIN_UNSUITABLE,
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"terrain": "other", "current_command": "RETURN"},
+            DeclineReason.CAPABILITY_UNAVAILABLE,
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"terrain": "other", "capabilities": ["item-a", "ITEM-B"]},
+            DeclineReason.CAPABILITY_UNAVAILABLE,
+        ),
+        (
+            "PROCEED_TO_WAYPOINT",
+            False,
+            {"terrain": "other", "capabilities": ["item-b", "item-a", "extra"]},
+            None,
+        ),
+        ("RETURN", False, {}, None),
+        ("RETURN", True, {}, DeclineReason.TERRAIN_UNSUITABLE),
+        ("HOLD", True, {}, None),
+        ("REPORT_STATUS", True, {"current_command": "RETURN"}, None),
+    ],
+)
+def test_configured_suitability(command, gate_return, overrides, reason):
+    state = FollowerState(
+        **{"terrain": "fixture", "capabilities": ["item-a"], **overrides}
+    )
+    before = copy.deepcopy(state)
+    payload = {"waypoint": "north-fence"} if command == "PROCEED_TO_WAYPOINT" else {}
+    before_payload = payload.copy()
+    policy = configured_decision_engine(
+        unsuitable_terrain={"fixture"},
+        check_return_terrain=gate_return,
+        required_capabilities={"PROCEED_TO_WAYPOINT": {"item-a", "item-b"}},
+    )
+
+    assert policy(state, command, payload, 0) == DecisionResult(reason is None, reason)
+    assert state == before
+    assert payload == before_payload

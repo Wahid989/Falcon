@@ -47,6 +47,7 @@ from typing import Callable, Mapping
 
 from src.agents.hierarchy import Hierarchy
 from src.roles.failover import choose_successor, succession_candidates
+from src.state.suitability import SuitabilityFailure, check_suitability
 from src.transport import Message
 
 SCHEMA_VERSION = 1
@@ -105,6 +106,9 @@ def basic_eligibility(
     equipment.
     """
 
+    blocked_terrain = frozenset(unsuitable_terrain)
+    equipment = frozenset(required_capabilities)
+
     def check(status: Mapping[str, object]) -> str | None:
         battery = status.get("battery_percent", 100)
         if status.get("mechanical_fault") or (
@@ -113,10 +117,15 @@ def basic_eligibility(
             return DenyReason.DEGRADED.value
         if status.get("current_command") is not None:
             return DenyReason.BUSY.value
-        if status.get("terrain") in unsuitable_terrain:
+        failure = check_suitability(
+            status.get("terrain"),
+            status.get("capabilities") or (),
+            unsuitable_terrain=blocked_terrain,
+            required_capabilities=equipment,
+        )
+        if failure is SuitabilityFailure.TERRAIN:
             return DenyReason.TERRAIN_UNSUITABLE.value
-        capabilities = set(status.get("capabilities") or ())
-        if not set(required_capabilities) <= capabilities:
+        if failure is SuitabilityFailure.EQUIPMENT:
             return DenyReason.EQUIPMENT_MISSING.value
         return None
 

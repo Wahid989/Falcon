@@ -103,6 +103,22 @@ def test_choose_successor(statuses, excluded, expected):
     assert chosen == expected
 
 
+def test_succession_applies_configured_role_terrain_and_equipment():
+    eligibility = basic_eligibility(
+        unsuitable_terrain=("fixture",), required_capabilities=("item-a", "item-b")
+    )
+    statuses = {
+        "agent-a": {**FIT, "terrain": "fixture", "capabilities": ["item-a", "item-b"]},
+        "agent-b": {**FIT, "capabilities": ["item-a"]},
+        "agent-c": {**FIT, "capabilities": ["item-b", "item-a"]},
+    }
+
+    assert (
+        choose_successor(CHAIN, "ground", statuses=statuses, eligibility=eligibility)
+        == "agent-c"
+    )
+
+
 def test_successor_takes_the_failed_place_and_keeps_its_followers():
     after = CHAIN.after_failure("ground", "agent-a", role_epoch=1)
     assert after.top == "agent-a"

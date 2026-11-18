@@ -53,7 +53,12 @@ roles.handle(replies[0])                # drone-a is now the top at epoch + 1
   doesn't change.
 - **Eligibility** is a pluggable check on a status snapshot. `basic_eligibility()`
   covers battery or fault (`degraded`), a current command (`busy`), terrain and
-  equipment. It is a stand-in until the shared self-check (FALCON-036) exists.
+  equipment. It shares the terrain and equipment check with the command
+  policy and keeps role requirements separate. Configure
+  `basic_eligibility(unsuitable_terrain=..., required_capabilities=...)` and
+  pass the result as `RoleManager(eligibility=...)` to apply the configured
+  commander criteria to grants and succession. Both sets default to empty.
+  Use the same commander criteria on managers that participate in succession.
 
 ## One commander, one level (050)
 
