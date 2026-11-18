@@ -70,7 +70,7 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - falcon
+      - storage
     restart: unless-stopped
 
   sql-server:
@@ -89,7 +89,7 @@ services:
       # when it is piped into the container.
       - ./storage/sql:/storage/sql:ro
     networks:
-      - falcon
+      - storage
     restart: unless-stopped
     healthcheck:
       # Reports healthy once SQL Server accepts connections, so storage-api
@@ -108,3 +108,6 @@ networks:
   falcon:
     driver: bridge
     internal: true
+
+  storage:
+    driver: bridge

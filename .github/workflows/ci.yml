@@ -41,6 +41,22 @@ jobs:
       - name: Run tests (pytest)
         run: timeout 30s python -m pytest tests/ -v
 
+  windows-transport:
+    name: Windows transport regression tests
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run socket and graceful-shutdown regressions
+        run: python -m pytest tests/integration/test_tcp_transport.py tests/integration/test_agent_tcp_sessions.py::test_clean_follower_shutdown_while_idle -v
+
   mvp:
     name: Docker MVP checkpoint
     runs-on: ubuntu-latest

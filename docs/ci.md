@@ -60,3 +60,11 @@ python -m pytest tests/ -v
 Run from the repository root with the project virtual environment active.
 Using `python -m pytest` includes the repository root on Python's import path,
 so tests can import `src.<package>`. This matches the `make test` command.
+
+## Windows transport regressions
+
+The independent `Windows transport regression tests` job uses Python 3.12 and
+the pinned dependencies on windows-latest. It runs the socket regression file
+and the graceful idle Follower shutdown test. The existing Linux job remains
+unchanged. Windows termination uses CTRL_BREAK_EVENT in a new process group;
+Popen.terminate() is a forced kill there and cannot test Python cleanup.

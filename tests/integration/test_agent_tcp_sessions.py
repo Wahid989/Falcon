@@ -6,6 +6,7 @@ All subprocess output is drained in threads and observed with finite queue waits
 
 import json
 import os
+import signal
 from pathlib import Path
 from queue import Empty, Queue
 import subprocess
@@ -34,6 +35,7 @@ class Process:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
         )
         self.out, self.err = Queue(), Queue()
         self.errors = []
@@ -272,5 +274,10 @@ def test_explicit_reconnect_preserves_live_follower_state(processes):
 
 def test_clean_follower_shutdown_while_idle(processes):
     follower, _ = start_follower(processes)
-    follower.process.terminate()
-    assert follower.process.wait(timeout=2) == 0
+    # TerminateProcess (Popen.terminate on Windows) cannot run Python cleanup.
+    # CTRL_BREAK_EVENT reaches the runner's graceful signal handler instead.
+    if sys.platform == "win32":
+        follower.process.send_signal(signal.CTRL_BREAK_EVENT)
+    else:
+        follower.process.send_signal(signal.SIGTERM)
+    assert follower.process.wait(timeout=5) == 0

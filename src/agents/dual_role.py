@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Callable, Mapping
 from src.agents.commander import Commander, Validator, default_validator
 from src.agents.follower import Follower
 from src.agents.hierarchy import Hierarchy
+from src.agents.heartbeat import HeartbeatMonitor
 from src.agents.relay import Relay, RelayIncomplete, RelayingDecision
 from src.decision import DecisionEngine, decide
 from src.logging.exchange import ExchangeLogger
@@ -65,7 +66,8 @@ class PeerLink(Transport):
     messages the router has delivered for this peer.
     """
 
-    def __init__(self, peer_id: str, link: Transport) -> None:
+    def __init__(self, peer_id: str, link: Transport, on_send=None) -> None:
+        self._on_send = on_send
         self.peer_id = peer_id
         self._link = link
         self.last_received: Message | None = None
@@ -81,6 +83,8 @@ class PeerLink(Transport):
         if self._closed.is_set():
             raise TransportClosedError("Peer link is closed")
         self._link.send(message)
+        if self._on_send is not None:
+            self._on_send(self.peer_id)
 
     def receive(self, timeout: float) -> Message:
         if self._closed.is_set() and self._inbox.empty():
@@ -160,6 +164,9 @@ class DualRoleAgent:
         relay_timeout: float | None = None,
         on_relay: Callable[[Relay], None] | None = None,
         roles: RoleManager | None = None,
+        heartbeat_interval: float | None = None,
+        heartbeat_misses: int = 3,
+        heartbeat_status: Callable[[], Mapping[str, object]] | None = None,
     ) -> None:
         follower_links = dict(follower_links or {})
         parent_id = hierarchy.parent_of(agent_id)
@@ -183,17 +190,20 @@ class DualRoleAgent:
         self.rejected: deque[tuple[Message, str]] = deque(maxlen=KEEP_REJECTED)
         self.incomplete: deque[RelayIncomplete] = deque(maxlen=KEEP_REJECTED)
         self.undeliverable: deque[Message] = deque(maxlen=KEEP_REJECTED)
+        self._heartbeat = None
+        self._heartbeat_thread = None
         self.roles = roles
         self._roles_lock = threading.Lock()
         self.relaying: RelayingDecision | None = None
 
         self._links: dict[str, Transport] = dict(follower_links)
         self._views: dict[str, PeerLink] = {
-            peer: PeerLink(peer, link) for peer, link in follower_links.items()
+            peer: PeerLink(peer, link, self._note_sent)
+            for peer, link in follower_links.items()
         }
         if parent_id is not None:
             self._links[parent_id] = parent_link
-            self._views[parent_id] = PeerLink(parent_id, parent_link)
+            self._views[parent_id] = PeerLink(parent_id, parent_link, self._note_sent)
 
         self.commander = Commander(
             agent_id,
@@ -233,6 +243,23 @@ class DualRoleAgent:
         self._readers: dict[str, threading.Thread] = {}
         self._started = False
         self._sync_epoch()
+        if heartbeat_interval is not None:
+            if roles is None:
+                raise ValueError("Heartbeat monitoring requires a RoleManager")
+            if heartbeat_status is None:
+                if self.follower is None:
+                    raise ValueError(
+                        "Top agent heartbeat requires a live status provider"
+                    )
+                heartbeat_status = self.follower.status_snapshot
+            self._heartbeat = HeartbeatMonitor(
+                roles,
+                heartbeat_status,
+                self._validate,
+                interval=heartbeat_interval,
+                missed_intervals=heartbeat_misses,
+                on_lost=self._hold_on_loss,
+            )
 
     # --- routing -------------------------------------------------------------
 
@@ -265,12 +292,25 @@ class DualRoleAgent:
         if self.roles is not None:
             with self._roles_lock:
                 if message.get("type") in ROLE_TYPES:
+                    if self._heartbeat is not None:
+                        self._heartbeat.received(message, arrived_from)
                     replies = self.roles.handle(message)
                     self._sync_epoch()
                     self._send_all(replies)
                     return "roles"
-                self.roles.observe(message)
+                if (
+                    message.get("type") == "heartbeat"
+                    and not self._validate(message)[0]
+                ):
+                    return None
+                accepted = self.roles.observe(message)
                 self._sync_epoch()
+                if self._heartbeat is not None:
+                    observed = accepted and self._heartbeat.received(
+                        message, arrived_from
+                    )
+                    if message.get("type") == "heartbeat":
+                        return "heartbeat" if observed else None
         self._views[arrived_from].deliver(message)
         return target
 
@@ -291,6 +331,7 @@ class DualRoleAgent:
                     f"{self.agent_id} has no link to {request['recipient_id']!r}"
                 )
             self._links[request["recipient_id"]].send(request)
+            self._note_sent(request["recipient_id"])
         return request
 
     def start(self) -> None:
@@ -300,6 +341,11 @@ class DualRoleAgent:
         self._started = True
         for peer, link in self._links.items():
             self._start_reader(peer, link)
+        if self._heartbeat is not None:
+            self._heartbeat_thread = threading.Thread(
+                target=self._heartbeat_loop, daemon=True, name="heartbeat"
+            )
+            self._heartbeat_thread.start()
 
     def replace_link(self, peer_id: str, link: Transport) -> None:
         """Swap in a fresh link to one peer, for example after it crashed.
@@ -324,6 +370,8 @@ class DualRoleAgent:
     def stop(self, timeout: float = 2.0) -> None:
         """Stop routing and close the module views. The real links stay open."""
         self._stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout)
         for reader in self._readers.values():
             reader.join(timeout)
         self._readers.clear()
@@ -356,6 +404,28 @@ class DualRoleAgent:
             return None
 
     # --- internals -----------------------------------------------------------
+
+    def _note_sent(self, peer: str) -> None:
+        if self._heartbeat is not None:
+            self._heartbeat.sent(peer)
+
+    def _hold_on_loss(self) -> None:
+        if self.follower is not None:
+            self.follower.state.movement_flag = False
+            self.follower.state.current_command = None
+
+    def poll_heartbeats(self) -> None:
+        """Run the heartbeat/failover callbacks under the RoleManager lock."""
+        if self._heartbeat is not None:
+            with self._roles_lock:
+                messages = self._heartbeat.poll()
+                self._sync_epoch()
+                self._send_all(messages)
+
+    def _heartbeat_loop(self) -> None:
+        period = min(POLL_SECONDS, self._heartbeat.interval / 4)
+        while not self._stop.wait(period):
+            self.poll_heartbeats()
 
     def _report_no_response(self, incomplete: RelayIncomplete) -> None:
         parent = self.hierarchy.parent_of(self.agent_id)
@@ -404,6 +474,7 @@ class DualRoleAgent:
                 continue
             try:
                 link.send(message)
+                self._note_sent(message["recipient_id"])
             except TransportError:
                 self.undeliverable.append(message)
 

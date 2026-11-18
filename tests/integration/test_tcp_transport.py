@@ -98,11 +98,37 @@ def test_bad_send_does_not_poison_link(raw_peer):
 
 def test_send_backpressure_timeout_closes_link(raw_peer):
     server, peer = raw_peer
-    server._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024)
-    peer.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
-    # No peer reads: a frame bigger than the socket buffers cannot finish.
+    connection = server._socket
+
+    class BackpressuredSocket:
+        """Write a real partial frame, then deterministically block further writes.
+
+        Kernel autotuning makes buffer-size-based tests unreliable on Windows.
+        Select still sees the real socket; send must enforce its own deadline
+        even when readiness repeatedly races with BlockingIOError.
+        """
+
+        sent = False
+
+        def fileno(self):
+            return connection.fileno()
+
+        def send(self, data):
+            if not self.sent:
+                self.sent = True
+                return connection.send(data[:8])
+            raise BlockingIOError()
+
+        def shutdown(self, how):
+            return connection.shutdown(how)
+
+        def close(self):
+            return connection.close()
+
+    server._socket = BackpressuredSocket()
     with pytest.raises(TransportTimeoutError):
-        server.send({"data": "x" * 900000})
+        server.send({"data": "x" * 100})
+    assert peer.recv(100)  # A partial frame really crossed the socket.
     with pytest.raises(TransportClosedError):
         server.send({})
 
