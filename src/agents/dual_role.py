@@ -260,6 +260,8 @@ class DualRoleAgent:
                 validator=self._validate,
                 exchange_log=exchange_log,
             )
+            if roles is not None:
+                roles.use_default_status(self.follower.status_snapshot)
 
         self._stop = threading.Event()
         self._readers: dict[str, threading.Thread] = {}
@@ -326,11 +328,52 @@ class DualRoleAgent:
         both modules before they handle the message.
         """
         target = self.route(message, arrived_from)
+        if (
+            target is None
+            and self.roles is not None
+            and arrived_from in self._links
+            and isinstance(message, dict)
+            and message.get("sender_id") == arrived_from
+            and message.get("recipient_id") == self.agent_id
+        ):
+            with self._roles_lock:
+                hierarchy = self.roles.hierarchy
+                if arrived_from in hierarchy:
+                    kind = message.get("type")
+                    epoch = message.get("role_epoch")
+                    if (
+                        kind == "role_request"
+                        and (
+                            self.agent_id in hierarchy.path_to_top(arrived_from)[1:]
+                            or (type(epoch) is int and epoch < self.roles.role_epoch)
+                        )
+                    ) or (
+                        kind in ("role_grant", "role_deny")
+                        and arrived_from in hierarchy.path_to_top(self.agent_id)[1:]
+                    ):
+                        target = "roles"
+                    elif self.roles.is_stale_role_reply(message):
+                        if self._validate(message)[0]:
+                            if self._exchange_log is not None:
+                                self._exchange_log.record("received", message)
+                            self._observe(message)
+                            return "roles"
         if target is None and self._claims_newer_authority(message, arrived_from):
             with self._roles_lock:
                 if self._validate(message)[0]:
                     self._observe(message)
             target = self.route(message, arrived_from)
+        if (
+            target != "follower"
+            and self.roles is not None
+            and isinstance(message, dict)
+            and message.get("type") == "command"
+        ):
+            # A command can have been queued before the old parent's link
+            # changed direction or stopped being a direct link.
+            with self._roles_lock:
+                if self._reject_delayed_command(message, arrived_from):
+                    return None
         if target is None:
             self._reject(message, arrived_from)
             return None
@@ -382,12 +425,32 @@ class DualRoleAgent:
         self._views[arrived_from].deliver(message)
         return target
 
+    def _reject_delayed_command(self, message: Message, peer: str) -> bool:
+        if (
+            peer not in self._links
+            or peer not in self.roles.hierarchy
+            or message.get("sender_id") != peer
+            or message.get("recipient_id") != self.agent_id
+            or type(message.get("role_epoch")) is not int
+            or message["role_epoch"] >= self.roles.role_epoch
+            or not self._validate(message)[0]
+        ):
+            return False
+        if self._exchange_log is not None:
+            self._exchange_log.record("received", message)
+        self.roles.observe(message)
+        reply = self._error_reply(
+            message, peer, "Command belongs to an older role epoch", code="STALE_EPOCH"
+        )
+        if reply is not None:
+            self._send_all([reply])
+        return True
+
     def request_role(self, target_id: str | None = None) -> Message:
         """Ask a commander above for the role, over the link to it.
 
-        The target must be a direct peer (this agent's commander): a
-        skip-level request needs a link to the top, which the runtime would
-        have to open.
+        A skip-level request uses a link the runtime has already attached
+        to the top with `accept_link`.
         """
         if self.roles is None:
             raise DualRoleError(f"{self.agent_id} has no Role Manager")
@@ -398,7 +461,11 @@ class DualRoleAgent:
                 raise DualRoleError(
                     f"{self.agent_id} has no link to {request['recipient_id']!r}"
                 )
-            self._links[request["recipient_id"]].send(request)
+            try:
+                self._links[request["recipient_id"]].send(request)
+            except TransportError:
+                self.roles.cancel_request()
+                raise
             self._note_sent(request["recipient_id"])
             if self._exchange_log is not None:
                 self._exchange_log.record("sent", request)
@@ -540,6 +607,10 @@ class DualRoleAgent:
             self._awaiting = (awaited, now)
             return []
         window = self._heartbeat.interval * self._heartbeat.missed_intervals
+        if self.roles.declined_promotion:
+            # Other agents must first wait out our announcement window
+            # before they can act on the next candidate.
+            window *= 2
         if now - self._awaiting[1] < window:
             return []
         self._awaiting = None
@@ -762,7 +833,12 @@ class DualRoleAgent:
                 pass
 
     def _error_reply(
-        self, message: Message, recipient: str, reason: str
+        self,
+        message: Message,
+        recipient: str,
+        reason: str,
+        *,
+        code: str = "INVALID_SENDER_OR_RECIPIENT",
     ) -> Message | None:
         """An ERROR response, when the message can be correlated and answered."""
         if not isinstance(message, dict) or message.get("type") == "response":
@@ -783,7 +859,7 @@ class DualRoleAgent:
             "payload": {
                 "response": "ERROR",
                 "in_reply_to": message_id,
-                "error": {"code": "INVALID_SENDER_OR_RECIPIENT", "message": reason},
+                "error": {"code": code, "message": reason},
             },
         }
         ok, _ = self._validate(reply)
