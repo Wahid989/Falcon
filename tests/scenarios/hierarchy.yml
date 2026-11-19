@@ -1,0 +1,4 @@
+states:
+  agent-01:
+    battery_percent: 85
+    position: north-fence
