@@ -267,6 +267,11 @@ class RoleManager:
             return None
         return self._expected
 
+    @property
+    def declined_promotion(self) -> bool:
+        """Whether this agent declined its own promotion in the active failover."""
+        return self.agent_id in self._excluded
+
     def candidate_timed_out(self) -> list[Message]:
         """The expected successor never announced itself; move to the next one."""
         if self._lost is None or self._expected is None:
