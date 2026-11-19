@@ -114,6 +114,11 @@ the storage service ingests. They are in `roles.records` and passed to
 ## Running agents
 
 Give a `DualRoleAgent` a `roles=RoleManager(...)`:
+- The agent uses its live Follower snapshot for eligibility checks unless the
+  Role Manager was given an explicit status callback.
+- To request the role from a non-adjacent top, the runtime must first attach a
+  link at both ends with `accept_link`. That link carries the role exchange and
+  becomes the new parent/child link if the top grants the request.
 - Role messages from its peers go to the manager, and the replies go back over
   the same link.
 - Every other message's epoch is shown to the manager first, and the

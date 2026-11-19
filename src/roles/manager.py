@@ -162,7 +162,7 @@ class RoleManager:
         self.hierarchy = hierarchy
         self._validate = validator
         self._eligibility = eligibility or basic_eligibility()
-        self._status = status or (lambda: {})
+        self._status = status
         self._on_record = on_record
         self._record_sinks: list[RecordSink] = []
         self._session_id = session_id
@@ -299,7 +299,7 @@ class RoleManager:
 
     def _try_promote(self) -> list[Message]:
         failed = self._lost
-        unfit = self._eligibility(self._status())  # live re-check
+        unfit = self._eligibility(self._local_status())  # live re-check
         if unfit is not None:
             self._record_change(
                 self.agent_id,
@@ -351,7 +351,7 @@ class RoleManager:
         parent = self.get_current_commander()
         if parent is None:
             return None
-        source = self._status() if status is None else status
+        source = self._local_status() if status is None else status
         status = {key: value for key, value in source.items() if key in STATUS_FIELDS}
         status["role_epoch"] = self.role_epoch
         status["agent_id"] = self.agent_id
@@ -385,7 +385,7 @@ class RoleManager:
         target_id = target_id or self.hierarchy.top
         if target_id not in self.hierarchy.path_to_top(self.agent_id)[1:]:
             raise RoleError(f"{target_id!r} is not a commander above {self.agent_id}")
-        unfit = self._eligibility(self._status())
+        unfit = self._eligibility(self._local_status())
         if unfit is not None:
             raise RoleError(f"{self.agent_id} fails its own eligibility check: {unfit}")
 
@@ -403,6 +403,29 @@ class RoleManager:
     def cancel_request(self) -> None:
         """Give up waiting (for example after a timeout); a late answer is ignored."""
         self._pending = None
+
+    def use_default_status(self, status: Callable[[], Mapping[str, object]]) -> None:
+        """Use the agent's live state unless the caller supplied a status source."""
+        if self._status is None:
+            self._status = status
+
+    def _local_status(self) -> Mapping[str, object]:
+        return {} if self._status is None else self._status()
+
+    def is_stale_role_reply(self, message: Message) -> bool:
+        """Identify a stale-epoch response to our pending role request."""
+        pending = self._pending
+        if pending is None or message.get("type") != "response":
+            return False
+        payload = message.get("payload")
+        return (
+            isinstance(payload, dict)
+            and message.get("sender_id") == pending.target_id
+            and payload.get("in_reply_to") == pending.message_id
+            and _error_code(message) == "STALE_EPOCH"
+            and type(message.get("role_epoch")) is int
+            and message["role_epoch"] > self.role_epoch
+        )
 
     # --- handling role messages ----------------------------------------------
 
