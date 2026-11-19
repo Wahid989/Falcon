@@ -50,6 +50,8 @@ the same answer.
   successor in time calls `candidate_timed_out()` and expects the next
   candidate. A running agent does this itself: the expected successor gets
   the same window as a lost commander (interval x missed intervals).
+  A candidate that declined its own promotion also allows time for peers to
+  finish waiting for its announcement before it times out the next candidate.
 - **Accepting.** A survivor accepts a newer-epoch heartbeat or command only
   from its own commander, or from the agent the rule designates, and then
   updates its view of the chain the same way the successor did. Anything else
@@ -90,6 +92,11 @@ and checks that drone-a takes over, the other drones and Ground accept it,
 Ground stays the top, and Ground's next order goes through drone-a to the
 drones. Also: an unfit first candidate skipped, a first candidate that dies
 too (time-out to the next), and a failover in the middle of a 4-level chain.
+FALCON-065 adds graceful handover, a declined live re-check followed by
+takeover, vacancy with position held, delayed orders, and a former commander
+rejoining over a fresh link. The deeper-search scenario supplies confirmed
+ancestor loss to the deeper candidate. Heartbeat detection supplies loss
+events for direct parents.
 
 ## 4. Invalidation (FALCON-064)
 

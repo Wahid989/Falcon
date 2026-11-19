@@ -48,7 +48,7 @@ ROLE_KEYS = (
     "reason",
 )
 FIT = {"battery_percent": 90, "current_command": None}
-INTERVAL = 0.05  # heartbeat interval; a loss is declared after 3 of them
+INTERVAL = 0.15  # heartbeat interval; a loss is declared after 3 of them
 
 
 def pair():
@@ -70,7 +70,14 @@ def wait_for(condition, timeout=5.0):
 class Fleet:
     """Every agent of a hierarchy, in memory, with a switchboard for new links."""
 
-    def __init__(self, hierarchy, *, states=None, log_dir=None, session_id="relink"):
+    def __init__(
+        self,
+        hierarchy,
+        *,
+        states=None,
+        log_dir=None,
+        session_id="relink",
+    ):
         states = states or {}
         self.down: set[str] = set()
         self.agents: dict[str, DualRoleAgent] = {}
@@ -166,6 +173,14 @@ class Fleet:
         return self.agents[name].roles
 
 
+def outcomes(agent):
+    return [
+        record["outcome"]
+        for record in list(agent.roles.records)
+        if record["record_type"] == "role_change"
+    ]
+
+
 def statuses_shared(fleet):
     """Every drone has heard every other drone's status (via drone-cmd's beats)."""
     return all(
@@ -197,6 +212,9 @@ def test_successor_takes_over_and_ground_commands_through_it(tmp_path):
         # Ground stays the top; everyone moved to the new epoch.
         assert fleet.roles("ground").role is Role.COMMANDER
         assert {fleet.roles(a).role_epoch for a in ("ground", *DRONES)} == {1}
+        assert {a for a in DRONES if "self_promoted" in outcomes(fleet.agents[a])} == {
+            "drone-a"
+        }
         accepted = [r for r in fleet.roles("ground").records if r.get("outcome")]
         assert [r["outcome"] for r in accepted] == ["successor_accepted"]
         assert accepted[0]["requester_id"] == "drone-a"
@@ -247,6 +265,148 @@ def test_a_successor_that_never_announces_is_passed_over():
         assert fleet.roles("drone-c").role_epoch == 1
         result = fleet.agents["ground"].commander.issue("drone-b", "HOLD", timeout=3)
         assert result.outcome is Outcome.COMPLY
+
+
+def test_graceful_handover_keeps_one_commander_without_triggering_failover():
+    chain = Hierarchy.chain(["lead", "standby"])
+    with Fleet(chain) as fleet:
+        lead, standby = (fleet.agents[name] for name in ("lead", "standby"))
+        standby.request_role()
+        assert wait_for(lambda: standby.commander.followers == ["lead"])
+
+        assert lead.roles.role is Role.FOLLOWER
+        assert standby.roles.role is Role.COMMANDER
+        assert lead.roles.get_current_commander() == "standby"
+        assert lead.roles.role_epoch == standby.roles.role_epoch == 1
+        assert outcomes(lead) == outcomes(standby) == ["granted"]
+
+
+def test_live_recheck_declines_and_next_candidate_takes_over(monkeypatch):
+    with Fleet(SPONSOR) as fleet:
+        first = fleet.agents["drone-a"]
+        assert wait_for(lambda: statuses_shared(fleet))
+        assert fleet.roles("drone-b").peer_status["drone-a"]["battery_percent"] >= 20
+
+        def status_at_promotion():
+            first.follower.state.battery_percent = 5
+            return first.follower.status_snapshot()
+
+        # The local battery drops after the last snapshot used to select it.
+        monkeypatch.setattr(first.roles, "_status", status_at_promotion)
+        fleet.kill("drone-cmd")
+
+        assert wait_for(
+            lambda: commanded_by(fleet, "drone-b", ("drone-a", "drone-c"))
+        ), {
+            name: (
+                fleet.roles(name).get_current_commander(),
+                fleet.roles(name).expected_successor,
+                list(fleet.roles(name).records),
+            )
+            for name in ("ground", *DRONES)
+        }
+        (decline,) = [
+            record
+            for record in first.roles.records
+            if record.get("outcome") == "promotion_declined"
+        ]
+        assert decline["reason"] == "degraded"
+        assert "self_promoted" not in outcomes(first)
+        assert outcomes(fleet.agents["drone-b"]) == ["self_promoted"]
+
+
+def test_confirmed_loss_from_deeper_candidate_relinks_the_running_chain():
+    chain = Hierarchy.chain(["lead", "direct", "deeper", "leaf"])
+    states = {"direct": {"battery_percent": 5}}
+    with Fleet(chain, states=states) as fleet:
+        direct, deeper = (fleet.agents[name] for name in ("direct", "deeper"))
+        fleet.kill("lead")
+        assert wait_for(lambda: direct.roles.expected_successor == "deeper")
+
+        # The runtime detects direct-parent loss. Supply the confirmed loss
+        # event to the deeper standby, whose own parent is still alive.
+        with deeper._roles_lock:
+            deeper.roles.observe_status("direct", direct.follower.status_snapshot())
+            messages = deeper.roles.on_commander_lost("lead")
+            deeper._sync_epoch()
+            deeper._send_all(deeper._after_change(messages))
+
+        assert wait_for(lambda: direct.roles.get_current_commander() == "deeper")
+        assert deeper.roles.role is Role.COMMANDER
+        assert deeper.roles.hierarchy.parent_of("leaf") == "deeper"
+        assert deeper.roles.role_epoch == direct.roles.role_epoch == 1
+        assert outcomes(deeper) == ["self_promoted"]
+        assert deeper.commander.issue("direct", "REPORT_STATUS", timeout=2).outcome is (
+            Outcome.STATUS_RESPONSE
+        )
+
+
+def test_all_unfit_candidates_hold_their_positions_with_the_role_vacant():
+    states = {
+        drone: {"battery_percent": 5, "position": "north-fence", "movement_flag": True}
+        for drone in DRONES
+    }
+    with Fleet(SPONSOR, states=states) as fleet:
+        assert wait_for(lambda: statuses_shared(fleet))
+        fleet.kill("drone-cmd")
+
+        assert wait_for(lambda: all(fleet.roles(drone).vacant for drone in DRONES))
+        for drone in DRONES:
+            agent = fleet.agents[drone]
+            state = agent.follower.state
+            assert state.position == "north-fence"
+            assert state.movement_flag is False
+            assert state.current_command is None
+            assert agent.roles.get_current_commander() is None
+            assert agent.roles.role_epoch == 0
+            assert outcomes(agent) == ["vacant"]
+
+
+def test_delayed_old_order_is_rejected_and_revived_commander_steps_down():
+    chain = Hierarchy.chain(["lead", "standby"])
+    states = {"standby": {"position": "north-fence"}}
+    with Fleet(chain, states=states) as fleet:
+        lead, standby = (fleet.agents[name] for name in ("lead", "standby"))
+        delayed = lead.commander.build_command("standby", "RETURN")
+        fleet.kill("lead")
+        assert wait_for(lambda: standby.hierarchy.top == "standby")
+
+        fresh, standby_link = pair()
+        try:
+            standby.accept_link("lead", standby_link)
+            fresh.send(delayed)
+            deadline = time.monotonic() + 3
+            while True:
+                response = fresh.receive(timeout=max(0, deadline - time.monotonic()))
+                if response["type"] == "response":
+                    break
+                assert time.monotonic() < deadline
+            assert response["payload"]["in_reply_to"] == delayed["message_id"]
+            assert response["payload"]["error"]["code"] == "STALE_EPOCH"
+            assert standby.follower.state.position == "north-fence"
+            assert any(
+                record.get("event_type") == "STALE_EPOCH_REJECTED"
+                and record["detail"]["message_id"] == delayed["message_id"]
+                for record in standby.roles.records
+            )
+
+            revived = DualRoleAgent(
+                "lead",
+                chain,
+                follower_links={"standby": fresh},
+                roles=RoleManager("lead", chain),
+            )
+            with revived:
+                assert wait_for(
+                    lambda: revived.roles.get_current_commander() == "standby"
+                )
+                assert revived.roles.role is Role.FOLLOWER
+                assert revived.roles.role_epoch == standby.roles.role_epoch == 1
+                assert outcomes(revived) == ["stepped_down"]
+                assert standby.roles.role is Role.COMMANDER
+        finally:
+            fresh.close()
+            standby_link.close()
 
 
 def run_failover(log_dir, session_id="relink"):
