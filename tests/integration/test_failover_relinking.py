@@ -331,7 +331,10 @@ def test_confirmed_loss_from_deeper_candidate_relinks_the_running_chain():
             deeper._sync_epoch()
             deeper._send_all(deeper._after_change(messages))
 
-        assert wait_for(lambda: direct.roles.get_current_commander() == "deeper")
+        assert wait_for(
+            lambda: direct.roles.get_current_commander() == "deeper"
+            and direct.follower.state.parent_id == "deeper"
+        )
         assert deeper.roles.role is Role.COMMANDER
         assert deeper.roles.hierarchy.parent_of("leaf") == "deeper"
         assert deeper.roles.role_epoch == direct.roles.role_epoch == 1
